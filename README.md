@@ -36,8 +36,53 @@ As credenciais são protegidas pelo armazenamento seguro do sistema operacional 
 Acesse a página de [Releases](https://github.com/edenilsonmota/ftp-file-synchronizer/releases) e baixe o pacote correspondente ao seu sistema:
 
 - **Windows:** `FTP File Synchronizer Setup x.x.x.exe`;
-- **Linux:** `FTP File Synchronizer-x.x.x.AppImage` ou `ftp-file-synchronizer_x.x.x_amd64.deb`;
+- **Linux:** `FTP File Synchronizer-x.x.x.AppImage`, `ftp-file-synchronizer_x.x.x_amd64.deb` ou `ftp-file-synchronizer-x.x.x-x64.pkg.tar.zst`;
 - **macOS:** `FTP File Synchronizer-x.x.x.dmg`.
+
+### Linux: instalar e desinstalar
+
+Escolha apenas um dos formatos abaixo.
+
+#### AppImage
+
+Não requer instalação no sistema. Dê permissão de execução e abra o arquivo:
+
+```bash
+chmod +x "FTP File Synchronizer-x.x.x.AppImage"
+./"FTP File Synchronizer-x.x.x.AppImage"
+```
+
+Para desinstalar, apague o arquivo AppImage que foi baixado.
+
+#### Debian/Ubuntu (`.deb`)
+
+Instale o pacote local com `apt`:
+
+```bash
+sudo apt install ./ftp-file-synchronizer_x.x.x_amd64.deb
+```
+
+Para desinstalar:
+
+```bash
+sudo apt remove ftp-file-synchronizer
+```
+
+#### Arch Linux (`.pkg.tar.zst`)
+
+Instale o pacote local com Pacman:
+
+```bash
+sudo pacman -U ftp-file-synchronizer-x.x.x-x64.pkg.tar.zst
+```
+
+Para desinstalar, incluindo dependências que ficaram sem uso:
+
+```bash
+sudo pacman -Rns ftp-file-synchronizer
+```
+
+Em todos os formatos, a desinstalação mantém as configurações e credenciais já salvas pelo aplicativo.
 
 ## Como usar
 
