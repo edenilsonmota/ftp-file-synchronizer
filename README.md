@@ -20,7 +20,7 @@ O arquivo `main.js` é apenas o ponto de entrada. Os componentes do processo pri
 
 A interface fica em `src/renderer` e acessa somente a API permitida por `src/preload.js`.
 
-As credenciais são protegidas pelo armazenamento seguro do sistema operacional quando disponível. Configurações da identidade antiga `CodeSyncFtp` são migradas automaticamente no primeiro uso.
+As credenciais são protegidas pelo armazenamento seguro do sistema operacional quando disponível. Em distribuições Linux sem um serviço de chaveiro compatível ativo, a senha ainda é persistida para não se perder ao reiniciar o aplicativo, mas fica sem criptografia no arquivo de configuração do usuário.
 
 ## Funcionalidades
 

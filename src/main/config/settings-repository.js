@@ -1,15 +1,12 @@
-const fs = require('fs');
-const path = require('path');
 const Store = require('electron-store');
 
 const ENCRYPTED_PREFIX = 'safe-storage:';
+const PLAINTEXT_PREFIX = 'plain-storage:';
 
 class SettingsRepository {
-    constructor({ app, safeStorage }) {
-        this.app = app;
+    constructor({ safeStorage }) {
         this.safeStorage = safeStorage;
         this.store = new Store();
-        this.migrateLegacySettings();
     }
 
     get() {
@@ -33,39 +30,25 @@ class SettingsRepository {
         this.store.set('config', safeConfig);
     }
 
-    migrateLegacySettings() {
-        if (this.store.has('config')) return;
-        const parent = path.dirname(this.app.getPath('userData'));
-        const legacyDirectories = ['CodeSyncFtp', 'code-sync-ftp'];
-        for (const directory of legacyDirectories) {
-            const configFile = path.join(parent, directory, 'config.json');
-            if (!fs.existsSync(configFile)) continue;
-            try {
-                const legacyData = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-                if (legacyData.config) {
-                    this.set({ projects: [], ...legacyData.config });
-                    console.log(`[Config] Configurações migradas de ${directory}.`);
-                    return;
-                }
-            } catch (error) {
-                console.error(`[Config] Falha ao migrar ${configFile}:`, error);
-            }
-        }
-    }
-
     encryptPassword(password = '') {
-        if (!password || password.startsWith(ENCRYPTED_PREFIX)) return password;
+        const value = String(password || '');
+        if (!value) return value;
         if (!this.safeStorage.isEncryptionAvailable()) {
-            console.warn('[Config] Armazenamento seguro indisponível; a senha não será persistida.');
-            return '';
+            // Em algumas distribuições Linux não há um serviço Secret Service/keyring
+            // disponível. Ainda assim, a configuração deve continuar utilizável entre
+            // execuções; o prefixo torna explícito que este valor não foi cifrado.
+            console.warn('[Config] Armazenamento seguro indisponível; a senha será salva sem criptografia.');
+            return `${PLAINTEXT_PREFIX}${value}`;
         }
-        return `${ENCRYPTED_PREFIX}${this.safeStorage.encryptString(password).toString('base64')}`;
+        return `${ENCRYPTED_PREFIX}${this.safeStorage.encryptString(value).toString('base64')}`;
     }
 
     decryptPassword(password = '') {
-        if (!password.startsWith(ENCRYPTED_PREFIX)) return password;
+        const value = String(password || '');
+        if (value.startsWith(PLAINTEXT_PREFIX)) return value.slice(PLAINTEXT_PREFIX.length);
+        if (!value.startsWith(ENCRYPTED_PREFIX)) return value;
         try {
-            const encrypted = Buffer.from(password.slice(ENCRYPTED_PREFIX.length), 'base64');
+            const encrypted = Buffer.from(value.slice(ENCRYPTED_PREFIX.length), 'base64');
             return this.safeStorage.decryptString(encrypted);
         } catch (error) {
             console.error('[Config] Não foi possível descriptografar a senha:', error);
@@ -74,4 +57,4 @@ class SettingsRepository {
     }
 }
 
-module.exports = { SettingsRepository };
+module.exports = { SettingsRepository, ENCRYPTED_PREFIX, PLAINTEXT_PREFIX };

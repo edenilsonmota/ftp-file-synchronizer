@@ -33,7 +33,7 @@ function startApplication() {
     });
 
     app.whenReady().then(() => {
-        const settings = new SettingsRepository({ app, safeStorage });
+        const settings = new SettingsRepository({ safeStorage });
         const ftpService = new FtpService();
         syncService = new SyncService({
             ftpService,
