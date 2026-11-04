@@ -1,0 +1,27 @@
+[package]
+name = "sync-core"
+description = "Motor de sincronização local → FTP"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+dirs = "7.0.0"
+keyring = "4.2.0"
+log = "0.4.35"
+notify = "8.2.1"
+notify-debouncer-full = "0.7.0"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.7.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+suppaftp = { version = "12.2.1", features = ["rustls-ring"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+libunftp = "0.24.0"
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net"] }
+unftp-sbe-fs = "0.4.0"

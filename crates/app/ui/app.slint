@@ -1,0 +1,392 @@
+import { Button, CheckBox, LineEdit, ListView, Palette, ScrollView, Spinner } from "std-widgets.slint";
+
+export struct ProjectRow {
+    local: string,
+    remote: string,
+}
+
+export enum LogLevel { info, success, error }
+
+export struct LogEntry {
+    time: string,
+    message: string,
+    level: LogLevel,
+}
+
+component SectionTitle inherits Text {
+    font-size: 15px;
+    font-weight: 600;
+    color: Palette.foreground;
+}
+
+component Field inherits VerticalLayout {
+    in property <string> label;
+    spacing: 4px;
+    Text {
+        text: root.label;
+        font-size: 12px;
+        color: Palette.foreground.with-alpha(0.7);
+    }
+    @children
+}
+
+component Card inherits Rectangle {
+    background: Palette.alternate-background;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.border;
+}
+
+component StatusPill inherits Rectangle {
+    in property <bool> running;
+    in property <bool> busy;
+    height: 26px;
+    width: label.preferred-width + 30px;
+    border-radius: self.height / 2;
+    background: root.running ? #4caf5033 : Palette.control-background;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 6px;
+        alignment: center;
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 4px;
+            background: root.busy ? #ff9800 : root.running ? #4caf50 : Palette.foreground.with-alpha(0.4);
+        }
+        label := Text {
+            vertical-alignment: center;
+            font-size: 12px;
+            text: root.busy ? "Aguarde..." : root.running ? "Sincronizando" : "Parado";
+            color: Palette.foreground;
+        }
+    }
+}
+
+/// Camada modal: escurece o fundo e bloqueia cliques na janela.
+component Overlay inherits Rectangle {
+    background: #00000099;
+    TouchArea { }
+    @children
+}
+
+export component AppWindow inherits Window {
+    title: "FTP File Synchronizer";
+    icon: @image-url("../../../assets/icons/512x512.png");
+    preferred-width: 1000px;
+    preferred-height: 750px;
+    min-width: 820px;
+    min-height: 600px;
+    background: Palette.background;
+
+    // Conexão
+    in-out property <string> host;
+    in-out property <string> user;
+    in-out property <string> password;
+    in-out property <string> port: "21";
+    in-out property <bool> secure;
+    in property <bool> testing;
+
+    // Projetos e estado
+    in property <[ProjectRow]> projects;
+    in property <[LogEntry]> logs;
+    in property <bool> running;
+    in property <bool> busy;
+    property <bool> locked: root.running || root.busy;
+
+    // Seletor de pasta remota
+    in property <bool> picker-open;
+    in property <bool> picker-loading;
+    in property <string> picker-path: "/";
+    in property <[string]> picker-dirs;
+
+    // Mensagem modal
+    in property <string> notice;
+
+    callback test-connection();
+    callback start-sync();
+    callback stop-sync();
+    callback add-project();
+    callback remove-project(int);
+    callback select-local(int);
+    callback remote-edited(int, string);
+    callback open-remote-picker(int);
+    callback picker-enter(string);
+    callback picker-up();
+    callback picker-confirm();
+    callback picker-cancel();
+    callback dismiss-notice();
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 16px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: "FTP File Synchronizer";
+                font-size: 20px;
+                font-weight: 700;
+                color: Palette.foreground;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            StatusPill {
+                running: root.running;
+                busy: root.busy;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        SectionTitle { text: "1. Servidor FTP"; }
+        Card {
+            HorizontalLayout {
+                padding: 14px;
+                spacing: 10px;
+                alignment: stretch;
+                Field {
+                    label: "Host";
+                    horizontal-stretch: 2;
+                    LineEdit {
+                        text <=> root.host;
+                        placeholder-text: "ftp.exemplo.com";
+                        enabled: !root.locked;
+                    }
+                }
+                Field {
+                    label: "Usuário";
+                    horizontal-stretch: 1;
+                    LineEdit {
+                        text <=> root.user;
+                        enabled: !root.locked;
+                    }
+                }
+                Field {
+                    label: "Senha";
+                    horizontal-stretch: 1;
+                    LineEdit {
+                        text <=> root.password;
+                        input-type: InputType.password;
+                        enabled: !root.locked;
+                    }
+                }
+                Field {
+                    label: "Porta";
+                    width: 80px;
+                    LineEdit {
+                        width: 80px;
+                        text <=> root.port;
+                        input-type: InputType.number;
+                        enabled: !root.locked;
+                    }
+                }
+                VerticalLayout {
+                    alignment: end;
+                    CheckBox {
+                        text: "FTPS";
+                        checked <=> root.secure;
+                        enabled: !root.locked;
+                    }
+                }
+                VerticalLayout {
+                    alignment: end;
+                    Button {
+                        text: root.testing ? "Testando..." : "Testar conexão";
+                        enabled: !root.locked && !root.testing;
+                        clicked => { root.test-connection(); }
+                    }
+                }
+            }
+        }
+
+        SectionTitle { text: "2. Mapeamento de pastas"; }
+        Card {
+            max-height: 240px;
+            VerticalLayout {
+                padding: 14px;
+                spacing: 10px;
+                ListView {
+                    min-height: 50px;
+                    preferred-height: root.projects.length * 46px;
+                    for project[index] in root.projects: HorizontalLayout {
+                        padding-bottom: 8px;
+                        spacing: 8px;
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            text: project.local;
+                            placeholder-text: "Pasta local";
+                            read-only: true;
+                            enabled: !root.locked;
+                        }
+                        Button {
+                            text: "Selecionar";
+                            enabled: !root.locked;
+                            clicked => { root.select-local(index); }
+                        }
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            text: project.remote;
+                            placeholder-text: "Pasta remota (/web/...)";
+                            enabled: !root.locked;
+                            edited(text) => { root.remote-edited(index, text); }
+                        }
+                        Button {
+                            text: "Escolher FTP";
+                            enabled: !root.locked;
+                            clicked => { root.open-remote-picker(index); }
+                        }
+                        Button {
+                            text: "Remover";
+                            enabled: !root.locked;
+                            clicked => { root.remove-project(index); }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: "Adicionar projeto";
+                        enabled: !root.locked;
+                        clicked => { root.add-project(); }
+                    }
+                }
+            }
+        }
+
+        Button {
+            text: root.running ? "PARAR" : "INICIAR";
+            primary: true;
+            height: 44px;
+            enabled: !root.busy;
+            clicked => {
+                if (root.running) {
+                    root.stop-sync();
+                } else {
+                    root.start-sync();
+                }
+            }
+        }
+
+        SectionTitle { text: "Logs"; }
+        Card {
+            vertical-stretch: 1;
+            min-height: 160px;
+            ListView {
+                for entry in root.logs: Text {
+                    x: 12px;
+                    width: parent.width - 24px;
+                    height: self.preferred-height + 6px;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    font-size: 13px;
+                    text: "[" + entry.time + "] " + entry.message;
+                    color: entry.level == LogLevel.success ? #4caf50
+                        : entry.level == LogLevel.error ? #f44336
+                        : Palette.foreground.with-alpha(0.75);
+                }
+            }
+        }
+    }
+
+    if root.picker-open: Overlay {
+        Card {
+            width: min(640px, root.width - 40px);
+            height: min(460px, root.height - 40px);
+            background: Palette.background;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+                SectionTitle { text: "Selecionar pasta remota (FTP)"; }
+                Rectangle {
+                    height: 34px;
+                    border-radius: 4px;
+                    background: Palette.alternate-background;
+                    Text {
+                        x: 10px;
+                        width: parent.width - 20px;
+                        text: root.picker-path;
+                        overflow: elide;
+                        color: Palette.foreground;
+                        vertical-alignment: center;
+                    }
+                }
+                if root.picker-loading: HorizontalLayout {
+                    alignment: center;
+                    vertical-stretch: 1;
+                    Spinner { indeterminate: true; }
+                }
+                if !root.picker-loading && root.picker-dirs.length == 0: Text {
+                    vertical-stretch: 1;
+                    text: "Nenhuma subpasta encontrada neste diretório.";
+                    color: Palette.foreground.with-alpha(0.6);
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                if !root.picker-loading && root.picker-dirs.length > 0: ListView {
+                    vertical-stretch: 1;
+                    for name in root.picker-dirs: Rectangle {
+                        height: 34px;
+                        background: area.has-hover ? Palette.alternate-background : transparent;
+                        border-radius: 4px;
+                        Text {
+                            x: 10px;
+                            text: name + "/";
+                            color: Palette.foreground;
+                            vertical-alignment: center;
+                        }
+                        area := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.picker-enter(name); }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button {
+                        text: "Subir pasta";
+                        enabled: !root.picker-loading && root.picker-path != "/";
+                        clicked => { root.picker-up(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button {
+                        text: "Cancelar";
+                        clicked => { root.picker-cancel(); }
+                    }
+                    Button {
+                        text: "Selecionar esta pasta";
+                        primary: true;
+                        enabled: !root.picker-loading;
+                        clicked => { root.picker-confirm(); }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.notice != "": Overlay {
+        Card {
+            width: min(480px, root.width - 40px);
+            height: content.preferred-height;
+            background: Palette.background;
+            content := VerticalLayout {
+                padding: 20px;
+                spacing: 16px;
+                Text {
+                    text: root.notice;
+                    wrap: word-wrap;
+                    color: Palette.foreground;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: "OK";
+                        primary: true;
+                        clicked => { root.dismiss-notice(); }
+                    }
+                }
+            }
+        }
+    }
+}

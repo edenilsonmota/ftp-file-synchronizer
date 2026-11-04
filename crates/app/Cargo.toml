@@ -1,0 +1,61 @@
+[package]
+name = "ftp-file-synchronizer"
+description = "Ferramenta de sincronização FTP automática"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+interprocess = "2.4.7"
+log = "0.4.35"
+rfd = "0.17.2"
+slint = { version = "1.18.1", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit",
+    "renderer-femtovg",
+    "renderer-software",
+    "accessibility",
+] }
+sync-core = { path = "../sync-core" }
+
+[build-dependencies]
+slint-build = "1.18.1"
+
+# Instaladores gerados por `cargo packager --release` (Windows, Linux e macOS).
+#
+# No Linux, o nome do arquivo .desktop, o nome dos ícones em hicolor e o
+# `app_id`/`WM_CLASS` da janela são todos `ftp-file-synchronizer`
+# (`sync_core::APP_ID`). Manter os três iguais é o que faz o ícone aparecer
+# corretamente em qualquer ambiente (GNOME, KDE, Hyprland, X11 ou Wayland).
+[package.metadata.packager]
+product-name = "FTP File Synchronizer"
+identifier = "com.edenilson.ftpfilesynchronizer"
+publisher = "Edenilson Mota"
+category = "DeveloperTool"
+out-dir = "../../dist"
+icons = [
+    "../../assets/icons/16x16.png",
+    "../../assets/icons/24x24.png",
+    "../../assets/icons/32x32.png",
+    "../../assets/icons/48x48.png",
+    "../../assets/icons/64x64.png",
+    "../../assets/icons/96x96.png",
+    "../../assets/icons/128x128.png",
+    "../../assets/icons/256x256.png",
+    "../../assets/icons/512x512.png",
+    "../../assets/icon.ico",
+]
+
+[package.metadata.packager.deb]
+desktop-template = "../../assets/linux/desktop.hbs"
+depends = ["libxkbcommon0", "libfontconfig1"]
+
+[package.metadata.packager.pacman]
+depends = ["libxkbcommon", "fontconfig"]
+
+[package.metadata.packager.nsis]
+installer-mode = "currentUser"

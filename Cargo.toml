@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["crates/sync-core", "crates/app"]
+
+[workspace.package]
+version = "3.0.0"
+edition = "2024"
+authors = ["Edenilson Mota <edenilsonmota.job@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/edenilsonmota/ftp-file-synchronizer"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3

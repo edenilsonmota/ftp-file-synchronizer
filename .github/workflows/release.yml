@@ -1,0 +1,113 @@
+name: Release
+
+# Gera os instaladores e publica no GitHub Releases ao criar uma tag:
+#   git tag v3.0.0 && git push origin v3.0.0
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  package:
+    name: Pacote (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu mais antigo disponível: o binário depende da glibc da máquina
+          # de build, então compilar numa base antiga mantém compatibilidade
+          # com distribuições mais velhas.
+          - name: Linux x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            formats: deb,appimage,pacman
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            formats: nsis
+          - name: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+            formats: dmg
+          - name: macOS Intel
+            os: macos-latest
+            target: x86_64-apple-darwin
+            formats: dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-packager
+
+      - name: Dependências de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libwayland-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libdbus-1-dev
+
+      - name: Compilação
+        run: cargo build --release -p ftp-file-synchronizer --target ${{ matrix.target }}
+
+      - name: Empacotamento
+        shell: bash
+        env:
+          # O AppImage usa linuxdeploy, que é ele próprio um AppImage; na CI não há FUSE.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: cargo packager --release -p ftp-file-synchronizer --target ${{ matrix.target }} --formats ${{ matrix.formats }}
+
+      # O cargo-packager gera um PKGBUILD; o makepkg num container Arch produz o .pkg.tar.zst.
+      - name: Pacote Arch Linux
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD/dist:/out" archlinux:latest bash -euc '
+            pacman -Syu --noconfirm --needed base-devel
+            useradd -m builder
+            cp /out/PKGBUILD /out/*.tar.gz /home/builder/
+            sed -i "s/^options=(.*)/options=(!lto !debug)/" /home/builder/PKGBUILD
+            chown -R builder /home/builder
+            su builder -c "cd /home/builder && makepkg --nodeps --noconfirm"
+            cp /home/builder/*.pkg.tar.zst /out/
+            chown $(stat -c %u:%g /out) /out/*.pkg.tar.zst'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.pkg.tar.zst
+            dist/*.exe
+            dist/*.dmg
+          if-no-files-found: error
+
+  publish:
+    name: Publicar release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
