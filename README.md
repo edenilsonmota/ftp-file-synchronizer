@@ -1,129 +1,196 @@
+<div align="center">
+
+<img src="assets/icons/256x256.png" width="108" alt="Logo do FTP File Synchronizer">
+
 # FTP File Synchronizer
 
-> Ferramenta de sincronização FTP automática, agnóstica a editor.
-> **Versão atual:** 3.0.0
+**Salve no editor, veja no servidor.**
 
-O **FTP File Synchronizer** é um aplicativo desktop leve que monitora pastas locais e envia automaticamente arquivos alterados para um servidor FTP. Funciona com Zed, Cursor, VS Code, Sublime Text, Notepad++ ou qualquer outro editor.
+Monitora suas pastas locais e envia cada alteração para o servidor FTP/FTPS em tempo real.<br>
+Funciona com qualquer editor. Leve, nativo e multiplataforma.
 
-O aplicativo é escrito em **Rust** com interface em **[Slint](https://slint.dev)**: sem navegador embutido, com instaladores de cerca de 10 MB e baixo consumo de memória.
+[![Release](https://img.shields.io/github/v/release/edenilsonmota/ftp-file-synchronizer?color=0a84ff&label=release)](https://github.com/edenilsonmota/ftp-file-synchronizer/releases/latest)
+[![CI](https://github.com/edenilsonmota/ftp-file-synchronizer/actions/workflows/ci.yml/badge.svg)](https://github.com/edenilsonmota/ftp-file-synchronizer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-30d158.svg)](LICENSE)
+[![Plataformas](https://img.shields.io/badge/Windows%20%7C%20Linux%20%7C%20macOS-suportado-ff9f0a.svg)](#-instalação)
+[![Feito com Rust](https://img.shields.io/badge/Rust-Slint-b7410e.svg?logo=rust)](https://slint.dev)
 
-## Funcionalidades
+[**Instalação**](#-instalação) · [**Funcionalidades**](#-funcionalidades) · [**Como usar**](#-como-usar) · [**Como funciona**](#%EF%B8%8F-como-funciona) · [**Desenvolvimento**](#%EF%B8%8F-desenvolvimento)
 
-- monitoramento e sincronização de arquivos em tempo real;
-- sincronização somente de alterações ocorridas após iniciar o monitoramento;
-- espelhamento de exclusões locais no servidor;
-- envio do conteúdo de pastas criadas ou renomeadas;
-- múltiplos mapeamentos local/remoto, com navegador de pastas do FTP;
-- FTP ou FTPS explícito (certificados validados pelo sistema operacional);
-- senha guardada no cofre do sistema (Windows Credential Manager, Keychain do macOS ou Secret Service no Linux);
-- instância única: abrir o aplicativo novamente traz a janela existente;
-- suporte a Windows, Linux (X11 e Wayland) e macOS.
+<br>
 
-## Instalação
+<img src="docs/assets/screenshot.png" width="820" alt="Janela do FTP File Synchronizer com servidor FTPS configurado e três projetos mapeados">
 
-Acesse a página de [Releases](https://github.com/edenilsonmota/ftp-file-synchronizer/releases) e baixe o pacote do seu sistema:
+</div>
 
-- **Windows:** `FTP File Synchronizer_x.x.x_x64-setup.exe`;
-- **Linux:** `ftp-file-synchronizer_x.x.x_x86_64.AppImage`, `ftp-file-synchronizer_x.x.x_amd64.deb` ou `ftp-file-synchronizer-x.x.x-1-x86_64.pkg.tar.zst`;
-- **macOS:** `.dmg` para Apple Silicon (`aarch64`) ou Intel (`x64`).
+---
 
-### Linux: instalar e desinstalar
+## ⚡ Por que existe
 
-Escolha apenas um dos formatos abaixo.
+Muitos projetos ainda são publicados por FTP: hospedagens compartilhadas, servidores legados, ambientes de homologação. O fluxo costuma ser salvar, abrir um cliente FTP, achar a pasta e arrastar o arquivo. A cada alteração.
+
+As extensões de editor resolvem parte do problema, mas prendem você a um editor e só enxergam o que é salvo por ele. Um `git checkout`, um build ou um arquivo gerado por outra ferramenta ficam de fora.
+
+O **FTP File Synchronizer** observa a pasta direto no sistema de arquivos. Qualquer alteração, venha de onde vier, chega ao servidor em menos de dois segundos.
+
+---
+
+## ✨ Funcionalidades
+
+- **🔄 Sincronização em tempo real.** Criou, editou, renomeou ou apagou: o servidor acompanha.
+- **📁 Vários projetos ao mesmo tempo.** Mapeie quantas pastas quiser, cada uma para seu destino remoto.
+- **🧭 Navegador de pastas do FTP.** Escolha a pasta remota navegando no servidor, sem digitar caminhos.
+- **🔒 FTPS e cofre de senhas.** TLS explícito validado pelos certificados do sistema; a senha fica no Windows Credential Manager, no Keychain do macOS ou no Secret Service do Linux.
+- **📦 Pastas inteiras.** Uma pasta criada ou renomeada tem todo o conteúdo enviado.
+- **🛡️ Exclusões com segurança.** Se a pasta do projeto sumir (disco desmontado, rede caiu), nada é apagado no servidor.
+- **🧹 Ignora o que não deve subir.** `node_modules`, `.git`, `.vscode` e `desktop.ini` ficam de fora.
+- **🔁 Resiliente.** Novas tentativas com reconexão automática e conexão mantida viva durante períodos ociosos.
+- **🪶 Leve.** Binário nativo de cerca de 20 MB, instaladores de cerca de 10 MB, sem navegador embutido.
+- **🖥️ Multiplataforma de verdade.** Mesma interface no Windows, Linux (X11 e Wayland) e macOS, testada nos três a cada alteração.
+
+---
+
+## 📊 Extensão de editor vs. FTP File Synchronizer
+
+| | Extensão FTP do editor | FTP File Synchronizer |
+|---|---|---|
+| **Funciona com qualquer editor** | ❌ Uma extensão por editor | ✅ **Zed, VS Code, Cursor, Sublime, Notepad++...** |
+| **Detecta `git checkout`, builds e geradores** | ❌ Só o que o editor salva | ✅ **Qualquer alteração no disco** |
+| **Vários projetos simultâneos** | ⚠️ Um workspace por vez | ✅ **Todos ao mesmo tempo** |
+| **Senha fora do arquivo de projeto** | ⚠️ Geralmente em `sftp.json` | ✅ **Cofre de senhas do sistema** |
+| **Continua com o editor fechado** | ❌ | ✅ |
+
+---
+
+## 🚀 Instalação
+
+Baixe o pacote do seu sistema na página de [**Releases**](https://github.com/edenilsonmota/ftp-file-synchronizer/releases/latest).
+
+| Sistema | Pacote |
+|---|---|
+| **Windows** | `FTP File Synchronizer_x.x.x_x64-setup.exe` |
+| **macOS (Apple Silicon)** | `FTP File Synchronizer_x.x.x_aarch64.dmg` |
+| **macOS (Intel)** | `FTP File Synchronizer_x.x.x_x64.dmg` |
+| **Debian / Ubuntu** | `ftp-file-synchronizer_x.x.x_amd64.deb` |
+| **Arch Linux** | `ftp-file-synchronizer-x.x.x-1-x86_64.pkg.tar.zst` |
+| **Qualquer Linux** | `ftp-file-synchronizer_x.x.x_x86_64.AppImage` |
+
+<details>
+<summary><b>Linux: comandos de instalação e desinstalação</b></summary>
 
 #### AppImage
-
-Não requer instalação no sistema. Dê permissão de execução e abra o arquivo:
 
 ```bash
 chmod +x ftp-file-synchronizer_x.x.x_x86_64.AppImage
 ./ftp-file-synchronizer_x.x.x_x86_64.AppImage
 ```
 
-Para desinstalar, apague o arquivo AppImage que foi baixado.
+Para desinstalar, apague o arquivo.
 
-#### Debian/Ubuntu (`.deb`)
-
-```bash
-sudo apt install ./ftp-file-synchronizer_x.x.x_amd64.deb
-```
-
-Para desinstalar:
+#### Debian / Ubuntu
 
 ```bash
-sudo apt remove ftp-file-synchronizer
+sudo apt install ./ftp-file-synchronizer_x.x.x_amd64.deb   # instalar
+sudo apt remove ftp-file-synchronizer                      # desinstalar
 ```
 
-#### Arch Linux (`.pkg.tar.zst`)
+#### Arch Linux
 
 ```bash
-sudo pacman -U ftp-file-synchronizer-x.x.x-1-x86_64.pkg.tar.zst
+sudo pacman -U ftp-file-synchronizer-x.x.x-1-x86_64.pkg.tar.zst   # instalar
+sudo pacman -Rns ftp-file-synchronizer                            # desinstalar
 ```
 
-Para desinstalar, incluindo dependências que ficaram sem uso:
+A desinstalação mantém as configurações salvas.
 
-```bash
-sudo pacman -Rns ftp-file-synchronizer
-```
+</details>
 
-Em todos os formatos, a desinstalação mantém as configurações já salvas pelo aplicativo.
+> [!NOTE]
+> **macOS:** enquanto o aplicativo não é assinado e notarizado pela Apple, o sistema bloqueia a primeira abertura. Depois de copiá-lo para **Aplicativos**, libere-o com:
+>
+> ```bash
+> xattr -dr com.apple.quarantine "/Applications/FTP File Synchronizer.app"
+> ```
 
-### macOS
+> [!NOTE]
+> **Windows:** o instalador ainda não é assinado digitalmente. Se o SmartScreen aparecer, clique em **Mais informações → Executar assim mesmo**.
 
-Enquanto o aplicativo não é assinado e notarizado pela Apple, o macOS bloqueia a primeira abertura. Depois de copiar o app para **Aplicativos**, libere-o com:
+---
 
-```bash
-xattr -dr com.apple.quarantine "/Applications/FTP File Synchronizer.app"
-```
+## 🧭 Como usar
 
-## Como usar
-
-1. Preencha host, usuário, senha e porta do FTP (marque **FTPS** se o servidor suportar).
-2. Adicione um projeto selecionando a pasta local e informando a pasta remota, como `/public_html/site`, ou escolha-a em **Escolher FTP**.
+1. Preencha **host**, **usuário**, **senha** e **porta**. Marque **FTPS** se o servidor suportar e clique em **Testar conexão**.
+2. Em **Mapeamento de pastas**, escolha a pasta local e a pasta remota (digite, como `/public_html/site`, ou use **Escolher FTP**).
 3. Clique em **INICIAR**.
-4. Trabalhe normalmente no seu editor; as mudanças serão sincronizadas.
+4. Trabalhe normalmente: cada alteração aparece no log e chega ao servidor.
 
-Ao minimizar, o aplicativo permanece na barra de tarefas. Ao fechar a janela, o aplicativo e a sincronização são encerrados e a configuração é salva.
+> [!TIP]
+> Abrir o aplicativo de novo traz a janela que já está aberta, em vez de iniciar uma segunda cópia. Fechar a janela encerra a sincronização e salva a configuração.
 
-Os itens `node_modules`, `.git`, `.vscode` e `desktop.ini` são ignorados. Se a pasta do projeto ficar indisponível (disco desmontado, unidade de rede desconectada), as exclusões não são espelhadas no servidor.
+---
 
-## Arquitetura
+## ⚙️ Como funciona
 
-O projeto é um workspace Cargo com dois crates:
+```mermaid
+flowchart LR
+    A[Editor, git, build...] -->|grava arquivo| B[Pasta local]
+    B -->|evento do sistema| C[Observador<br/>notify]
+    C -->|caminho alterado| D[Fila sem duplicatas]
+    D -->|estado atual do disco| E{Decisão}
+    E -->|arquivo existe| F[Upload]
+    E -->|caminho sumiu| G[Remoção remota]
+    E -->|pasta nova| H[Envia conteúdo]
+    F & G & H --> I[(Servidor FTP/FTPS)]
+```
 
-- `crates/sync-core`: motor de sincronização, sem dependência de interface:
-  - `config.rs`: persistência da configuração, cofre de senhas;
-  - `validate.rs`: validação da configuração;
-  - `ftp.rs`: cliente FTP/FTPS;
-  - `engine.rs`: observador de pastas, fila e envio;
-  - `remote_path.rs`: caminhos remotos.
-- `crates/app`: aplicativo desktop:
-  - `ui/app.slint`: interface;
-  - `src/main.rs`: ligação entre interface e motor;
-  - `src/single_instance.rs`: instância única.
+Os eventos de arquivo variam entre Windows, Linux e macOS: renomeações chegam de formas diferentes, eventos vêm agrupados ou com tipos genéricos. Por isso a fila guarda apenas **qual caminho mudou**, e a ação é decidida no momento do envio olhando o disco. Esse é o motivo de o comportamento ser o mesmo nos três sistemas.
 
-Os eventos do sistema de arquivos variam entre Windows, Linux e macOS. Por isso a fila guarda apenas *qual caminho mudou* e a ação é decidida ao processar, olhando o estado atual do disco: arquivo existente gera upload, caminho inexistente gera remoção remota, pasta criada ou renomeada gera o envio do seu conteúdo.
+Todo envio usa modo binário, preservando imagens, arquivos compactados e quebras de linha exatamente como estão no disco.
 
-### Ícones no Linux
+<details>
+<summary><b>Estrutura do projeto</b></summary>
 
-O nome do binário, o `app_id` da janela no Wayland, o `WM_CLASS` no X11, o arquivo `ftp-file-synchronizer.desktop` e os ícones em `/usr/share/icons/hicolor/<tamanho>/apps/ftp-file-synchronizer.png` usam o mesmo identificador (`sync_core::APP_ID`). Manter todos iguais é o que permite a qualquer ambiente (GNOME, KDE, Hyprland e outros) associar a janela ao ícone.
+Workspace Cargo com dois crates:
 
-## Desenvolvimento
+| Caminho | Responsabilidade |
+|---|---|
+| `crates/sync-core/src/config.rs` | Persistência da configuração e cofre de senhas |
+| `crates/sync-core/src/validate.rs` | Validação da configuração |
+| `crates/sync-core/src/ftp.rs` | Cliente FTP/FTPS |
+| `crates/sync-core/src/engine.rs` | Observador de pastas, fila e envio |
+| `crates/sync-core/src/remote_path.rs` | Caminhos remotos |
+| `crates/app/ui/app.slint` | Interface |
+| `crates/app/src/main.rs` | Ligação entre interface e motor |
+| `crates/app/src/single_instance.rs` | Instância única |
+
+`sync-core` não depende da interface e é testado isoladamente.
+
+</details>
+
+<details>
+<summary><b>Ícones no Linux</b></summary>
+
+O nome do binário, o `app_id` da janela no Wayland, o `WM_CLASS` no X11, o arquivo `ftp-file-synchronizer.desktop` e os ícones em `/usr/share/icons/hicolor/<tamanho>/apps/ftp-file-synchronizer.png` usam o mesmo identificador (`sync_core::APP_ID`). É isso que permite a qualquer ambiente (GNOME, KDE, Hyprland, Sway e outros) associar a janela ao ícone correto.
+
+</details>
+
+---
+
+## 🛠️ Desenvolvimento
 
 ### Pré-requisitos
 
-- Rust estável, instalado via [rustup](https://rustup.rs);
-- no Linux, bibliotecas de desenvolvimento:
-  - Debian/Ubuntu: `sudo apt install libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libdbus-1-dev`;
-  - Arch: `sudo pacman -S fontconfig libxkbcommon wayland`.
-
-Para editar a interface com pré-visualização ao vivo, instale a extensão do Slint no seu editor (VS Code, Zed e outros).
+- Rust estável via [rustup](https://rustup.rs).
+- No Linux, bibliotecas de desenvolvimento:
+  - **Debian/Ubuntu:** `sudo apt install libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libdbus-1-dev`
+  - **Arch:** `sudo pacman -S fontconfig libxkbcommon wayland`
+- Opcional: extensão do [Slint](https://slint.dev) no editor, para pré-visualizar a interface ao vivo.
 
 ### Comandos
 
 ```bash
 cargo run -p ftp-file-synchronizer        # inicia o aplicativo
-cargo test --workspace                     # testes (inclui servidor FTP real e observador de pastas)
+cargo test --workspace                     # testes (servidor FTP real e observador de pastas)
 cargo clippy --workspace --all-targets     # análise estática
 cargo fmt --all                            # formatação
 ```
@@ -136,12 +203,14 @@ cargo build --release -p ftp-file-synchronizer
 cargo packager --release -p ftp-file-synchronizer
 ```
 
-Os pacotes são gravados em `dist/`. No Linux são gerados `.deb`, AppImage e um `PKGBUILD`; em uma máquina Arch, rode `makepkg --nodeps` dentro de `dist/` para obter o `.pkg.tar.zst`. Em distribuições muito recentes, como Arch, gere o AppImage com `NO_STRIP=1` antes do comando.
+Os pacotes vão para `dist/`. No Linux são gerados `.deb`, AppImage e um `PKGBUILD`. Numa máquina Arch, rode `makepkg --nodeps` dentro de `dist/` para obter o `.pkg.tar.zst`. Em distribuições muito recentes, gere o AppImage com `NO_STRIP=1`.
 
 ### Integração contínua e releases
 
-- `.github/workflows/ci.yml`: formatação, Clippy, testes e compilação em Windows, Linux e macOS a cada push e pull request.
-- `.github/workflows/release.yml`: ao publicar uma tag `v*`, gera os instaladores dos três sistemas e cria a release no GitHub:
+| Workflow | Quando roda | O que faz |
+|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | Push e pull request | Formatação, Clippy, testes e build no Windows, Linux e macOS |
+| [`release.yml`](.github/workflows/release.yml) | Tag `v*` | Gera os instaladores dos três sistemas e publica a release |
 
 ```bash
 git tag v3.0.0
@@ -150,6 +219,19 @@ git push origin v3.0.0
 
 O pacote Linux é compilado no Ubuntu 22.04 para continuar compatível com distribuições mais antigas.
 
-## Agradecimentos
+---
 
-Projeto criado por [Edenilson Mota](https://github.com/edenilsonmota). Interface construída com [Slint](https://slint.dev).
+## 🤝 Contribuindo
+
+Issues e pull requests são bem-vindos. Antes de abrir um PR, rode `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` e `cargo test --workspace`. A CI repete as três verificações nos três sistemas.
+
+---
+
+## 📄 Licença
+
+Distribuído sob a licença [MIT](LICENSE).
+
+<div align="center">
+<br>
+Criado por <a href="https://github.com/edenilsonmota">Edenilson Mota</a> · Interface feita com <a href="https://slint.dev">Slint</a>
+</div>
