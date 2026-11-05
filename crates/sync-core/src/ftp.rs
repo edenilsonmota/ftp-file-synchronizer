@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::io;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -50,6 +51,11 @@ pub fn connect(config: &Config) -> Result<RustlsFtpStream> {
     };
     stream.get_ref().set_read_timeout(Some(TIMEOUT))?;
     stream.get_ref().set_write_timeout(Some(TIMEOUT))?;
+    // Servidores atrás de NAT costumam anunciar no PASV um IP interno, inalcançável daqui;
+    // a conexão de dados usa o mesmo IP da conexão de controle (como o EPSV faria).
+    stream.set_passive_nat_workaround(true);
+    // O padrão da biblioteca conecta sem timeout e trava ~2 min quando a porta não responde.
+    let mut stream = stream.passive_stream_builder(open_data_connection);
 
     if config.secure {
         // Usa os certificados confiáveis do sistema operacional, incluindo CAs corporativas.
@@ -59,6 +65,22 @@ pub fn connect(config: &Config) -> Result<RustlsFtpStream> {
     stream.login(&config.user, &config.password)?;
     // O padrão da biblioteca é ASCII, que converte quebras de linha e corrompe binários.
     stream.transfer_type(FileType::Binary)?;
+    Ok(stream)
+}
+
+fn open_data_connection(address: SocketAddr) -> suppaftp::FtpResult<TcpStream> {
+    let stream = TcpStream::connect_timeout(&address, TIMEOUT)
+        .and_then(|stream| {
+            stream.set_read_timeout(Some(TIMEOUT))?;
+            stream.set_write_timeout(Some(TIMEOUT))?;
+            Ok(stream)
+        })
+        .map_err(|error| {
+            suppaftp::FtpError::ConnectionError(io::Error::new(
+                error.kind(),
+                format!("conexão de dados com {address} falhou: {error}"),
+            ))
+        })?;
     Ok(stream)
 }
 
