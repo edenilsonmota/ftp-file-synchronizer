@@ -384,6 +384,16 @@ fn collect_config(ui: &AppWindow) -> Config {
     }
 }
 
+/// O log em ordem cronológica (a tela mostra o mais recente primeiro).
+fn logs_as_text(logs: &ModelRc<LogEntry>) -> String {
+    let mut lines: Vec<String> = logs
+        .iter()
+        .map(|entry| format!("[{}] {}", entry.time, entry.message))
+        .collect();
+    lines.reverse();
+    lines.join("\n")
+}
+
 /// Abre uma pasta ou um link no aplicativo padrão do sistema.
 fn open_external(weak: &Weak<AppWindow>, target: &std::ffi::OsStr) {
     if let Err(error) = open::that_detached(target) {
@@ -703,6 +713,10 @@ fn register_settings_callbacks(ui: &AppWindow, app: &Rc<App>) {
     ui.on_open_repository({
         let weak = ui.as_weak();
         move || open_external(&weak, env!("CARGO_PKG_REPOSITORY").as_ref())
+    });
+    ui.on_logs_text({
+        let weak = ui.as_weak();
+        move || logs_as_text(&weak.unwrap().get_logs()).into()
     });
     ui.on_clear_logs({
         let weak = ui.as_weak();
@@ -1070,6 +1084,22 @@ mod tests {
     }
 
     #[test]
+    fn copia_o_log_em_ordem_cronologica() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        assert_eq!(ui.invoke_logs_text(), "");
+        push_log(ui, CoreLogLevel::Info, "primeira".into());
+        push_log(ui, CoreLogLevel::Success, "segunda".into());
+        let text = ui.invoke_logs_text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].ends_with("] primeira"), "{text}");
+        assert!(lines[1].ends_with("] segunda"), "{text}");
+        assert!(lines[0].starts_with('['));
+        fixture.click("Copy logs");
+    }
+
+    #[test]
     fn acoes_principais_tem_botoes_acessiveis() {
         let fixture = Fixture::new();
         for label in [
@@ -1086,6 +1116,7 @@ mod tests {
             "Browse FTP folder",
             "Ignored files",
             "Remove project",
+            "Copy logs",
             "Clear logs",
         ] {
             assert!(

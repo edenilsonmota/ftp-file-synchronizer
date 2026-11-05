@@ -28,6 +28,7 @@ export struct LogEntry {
 // Ícones Lucide (ISC, ver icons/LICENSE), embutidos no executável.
 // São desenhados pelo próprio Slint, então aparecem iguais em qualquer sistema.
 global Icons {
+    out property <image> check: @image-url("icons/check.svg");
     out property <image> chevron-left: @image-url("icons/chevron-left.svg");
     out property <image> chevron-right: @image-url("icons/chevron-right.svg");
     out property <image> copy: @image-url("icons/copy.svg");
@@ -929,6 +930,8 @@ export component AppWindow inherits Window {
     callback duplicate-profile();
     callback delete-profile();
     callback clear-logs();
+    /// Texto do log, em ordem cronológica, para a área de transferência.
+    pure callback logs-text() -> string;
     callback open-config-folder();
     callback open-repository();
     callback language-selected(int);
@@ -1381,6 +1384,12 @@ export component AppWindow inherits Window {
                     SectionLabel { text: @tr("LOGS"); }
                     Rectangle { horizontal-stretch: 1; }
                     IconButton {
+                        icon: root.logs-copied ? Icons.check : Icons.copy;
+                        tooltip: root.logs-copied ? @tr("Copied!") : @tr("Copy logs");
+                        enabled: root.logs.length > 0;
+                        clicked => { root.copy-logs(); }
+                    }
+                    IconButton {
                         icon: Icons.eraser;
                         tooltip: @tr("Clear logs");
                         enabled: root.logs.length > 0;
@@ -1423,6 +1432,28 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
+
+    // Cópia para a área de transferência pelo mesmo caminho do Ctrl+C dos campos
+    // de texto, que o Slint já implementa em Windows, macOS, X11 e Wayland.
+    property <bool> logs-copied;
+    clipboard-buffer := TextInput {
+        width: 0;
+        height: 0;
+        opacity: 0;
+        single-line: false;
+        read-only: true;
+    }
+    function copy-logs() {
+        clipboard-buffer.text = root.logs-text();
+        clipboard-buffer.select-all();
+        clipboard-buffer.copy();
+        root.logs-copied = true;
+    }
+    Timer {
+        interval: 1500ms;
+        running: root.logs-copied;
+        triggered => { root.logs-copied = false; }
     }
 
     if root.sidebar-collapsed && root.sidebar-tip != "": Rectangle {
