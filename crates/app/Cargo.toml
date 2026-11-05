@@ -5,12 +5,14 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 publish = false
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 interprocess = "2.4.7"
 log = "0.4.35"
+open = "5.4.5"
 rfd = "0.17.2"
 slint = { version = "1.18.1", default-features = false, features = [
     "std",
@@ -24,6 +26,10 @@ sync-core = { path = "../sync-core" }
 
 [build-dependencies]
 slint-build = "1.18.1"
+
+[dev-dependencies]
+i-slint-backend-testing = "=1.18.1"
+tempfile = "3.27.0"
 
 # Instaladores gerados por `cargo packager --release` (Windows, Linux e macOS).
 #

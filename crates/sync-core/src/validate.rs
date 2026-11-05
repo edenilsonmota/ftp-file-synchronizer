@@ -21,12 +21,17 @@ pub fn connection(config: &Config) -> Result<Config> {
     })
 }
 
-/// Valida a configuração completa usada pela sincronização.
+/// Valida a configuração usada pela sincronização.
+/// O resultado contém apenas os projetos ativos.
 pub fn config(config: &Config) -> Result<Config> {
     let mut validated = connection(config)?;
+    if config.projects.is_empty() {
+        return Err(Error::invalid("Adicione pelo menos um projeto válido."));
+    }
     validated.projects = config
         .projects
         .iter()
+        .filter(|project| project.enabled)
         .map(|project| {
             let remote = project.remote.trim().to_string();
             if project.local.as_os_str().is_empty() || remote.is_empty() {
@@ -39,11 +44,17 @@ pub fn config(config: &Config) -> Result<Config> {
                     local.display()
                 )));
             }
-            Ok(Project { local, remote })
+            Ok(Project {
+                local,
+                remote,
+                ..project.clone()
+            })
         })
         .collect::<Result<_>>()?;
     if validated.projects.is_empty() {
-        return Err(Error::invalid("Adicione pelo menos um projeto válido."));
+        return Err(Error::invalid(
+            "Todos os projetos estão desativados; ative pelo menos um.",
+        ));
     }
     Ok(validated)
 }
@@ -79,6 +90,7 @@ mod tests {
         let missing = Project {
             local: dir.path().join("nao-existe"),
             remote: "/r".into(),
+            ..Project::default()
         };
         assert!(
             config(&Config {
@@ -90,6 +102,7 @@ mod tests {
         let existing = Project {
             local: dir.path().to_path_buf(),
             remote: " /r ".into(),
+            ..Project::default()
         };
         let valid = config(&Config {
             projects: vec![existing],
@@ -97,5 +110,36 @@ mod tests {
         })
         .unwrap();
         assert_eq!(valid.projects[0].remote, "/r");
+    }
+
+    #[test]
+    fn ignora_projetos_desativados() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = Project {
+            local: dir.path().to_path_buf(),
+            remote: "/ativo".into(),
+            ..Project::default()
+        };
+        // Desativado e com pasta inexistente: não deve impedir a sincronização.
+        let disabled = Project {
+            local: dir.path().join("nao-existe"),
+            remote: "/desativado".into(),
+            enabled: false,
+            ..Project::default()
+        };
+        let valid = config(&Config {
+            projects: vec![disabled.clone(), active],
+            ..base()
+        })
+        .unwrap();
+        assert_eq!(valid.projects.len(), 1);
+        assert_eq!(valid.projects[0].remote, "/ativo");
+        assert!(
+            config(&Config {
+                projects: vec![disabled],
+                ..base()
+            })
+            .is_err()
+        );
     }
 }

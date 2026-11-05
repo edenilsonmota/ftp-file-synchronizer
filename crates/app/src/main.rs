@@ -4,7 +4,7 @@
 mod single_instance;
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -12,7 +12,10 @@ use std::thread;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 use sync_core::engine::{EngineEvent, LogLevel as CoreLogLevel};
-use sync_core::{Config, ConfigStore, Project, SyncEngine, ftp, remote_path, validate};
+use sync_core::ignore_rules::{IgnoreRules, parse_patterns};
+use sync_core::{
+    Config, ConfigStore, Profile, Project, Settings, SyncEngine, Theme, ftp, remote_path, validate,
+};
 
 slint::include_modules!();
 
@@ -31,11 +34,10 @@ fn main() -> Result<(), slint::PlatformError> {
     slint::set_xdg_app_id(sync_core::APP_ID)?;
 
     let ui = AppWindow::new()?;
-    let projects = Rc::new(VecModel::<ProjectRow>::default());
-    ui.set_projects(projects.clone().into());
     ui.set_logs(Rc::new(VecModel::<LogEntry>::default()).into());
+    ui.set_app_version(env!("CARGO_PKG_VERSION").into());
 
-    let store = load_settings(&ui, &projects);
+    let app = App::load(&ui, ConfigStore::open_default());
     let engine = create_engine(&ui);
 
     single_instance::listen({
@@ -49,20 +51,24 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     register_connection_callbacks(&ui);
-    register_sync_callbacks(&ui, &engine, store.clone());
-    register_project_callbacks(&ui, &projects);
-    register_remote_picker(&ui, &projects);
+    register_sync_callbacks(&ui, &app, &engine);
+    register_profile_callbacks(&ui, &app);
+    register_project_callbacks(&ui, &app);
+    register_remote_picker(&ui, &app);
+    register_settings_callbacks(&ui);
     ui.on_dismiss_notice({
         let weak = ui.as_weak();
         move || weak.unwrap().set_notice(SharedString::new())
     });
 
+    if app.settings.borrow().auto_start {
+        ui.invoke_start_sync();
+    }
+
     ui.run()?;
 
     // Fechar a janela encerra o app; a configuração editada não se perde.
-    if let Some(store) = store {
-        let _ = store.save(&collect_config(&ui));
-    }
+    app.persist();
     lock(&engine).stop();
     Ok(())
 }
@@ -73,47 +79,212 @@ fn lock(engine: &SharedEngine) -> MutexGuard<'_, SyncEngine> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn load_settings(ui: &AppWindow, projects: &VecModel<ProjectRow>) -> Option<Arc<ConfigStore>> {
-    let store = match ConfigStore::open_default() {
-        Ok(store) => store,
-        Err(error) => {
-            push_log(
-                ui,
+/// Estado da janela: as configurações em memória e os modelos exibidos.
+/// Os campos da tela mostram o perfil ativo; `capture` copia as edições de volta.
+struct App {
+    weak: Weak<AppWindow>,
+    settings: RefCell<Settings>,
+    store: Option<ConfigStore>,
+    projects: Rc<VecModel<ProjectRow>>,
+    profiles: Rc<VecModel<ProfileEntry>>,
+}
+
+impl App {
+    fn load(ui: &AppWindow, store: sync_core::Result<ConfigStore>) -> Rc<Self> {
+        let (store, settings) = match store {
+            Ok(store) => {
+                let settings = match store.load() {
+                    Ok(loaded) => {
+                        for notice in loaded.notices {
+                            push_log(ui, CoreLogLevel::Info, notice);
+                        }
+                        loaded.settings
+                    }
+                    Err(error) => {
+                        push_log(
+                            ui,
+                            CoreLogLevel::Error,
+                            format!("Falha ao carregar configurações: {error}"),
+                        );
+                        Settings::default()
+                    }
+                };
+                (Some(store), settings)
+            }
+            Err(error) => {
+                push_log(
+                    ui,
+                    CoreLogLevel::Error,
+                    format!("Falha ao abrir configurações: {error}"),
+                );
+                (None, Settings::default())
+            }
+        };
+
+        let app = Rc::new(Self {
+            weak: ui.as_weak(),
+            settings: RefCell::new(settings),
+            store,
+            projects: Rc::new(VecModel::default()),
+            profiles: Rc::new(VecModel::default()),
+        });
+        ui.set_projects(app.projects.clone().into());
+        ui.set_profiles(app.profiles.clone().into());
+        app.show_preferences();
+        app.show_profiles();
+        app
+    }
+
+    fn ui(&self) -> AppWindow {
+        self.weak.unwrap()
+    }
+
+    fn show_preferences(&self) {
+        let ui = self.ui();
+        let settings = self.settings.borrow();
+        ui.set_theme_index(match settings.theme {
+            Theme::System => 0,
+            Theme::Dark => 1,
+            Theme::Light => 2,
+        });
+        ui.set_sidebar_collapsed(settings.sidebar_collapsed);
+        ui.set_auto_start(settings.auto_start);
+        ui.set_mirror_deletions(settings.mirror_deletions);
+        ui.set_global_ignore(settings.ignore.join("\n").into());
+    }
+
+    /// Atualiza a lista de perfis e mostra o perfil ativo nos campos.
+    fn show_profiles(&self) {
+        let ui = self.ui();
+        let settings = self.settings.borrow();
+        self.profiles.set_vec(
+            settings
+                .profiles
+                .iter()
+                .map(profile_entry)
+                .collect::<Vec<_>>(),
+        );
+        ui.set_profile_index(settings.active_index() as i32);
+
+        let profile = settings.active();
+        let config = &profile.config;
+        ui.set_profile_name(profile.name.as_str().into());
+        ui.set_host(config.host.as_str().into());
+        ui.set_user(config.user.as_str().into());
+        ui.set_password(config.password.as_str().into());
+        ui.set_port(config.port.to_string().into());
+        ui.set_secure(config.secure);
+        let mut rows: Vec<ProjectRow> = config.projects.iter().map(project_row).collect();
+        if rows.is_empty() {
+            rows.push(project_row(&Project::default()));
+        }
+        self.projects.set_vec(rows);
+    }
+
+    /// Copia as edições da tela para as configurações em memória.
+    fn capture(&self) {
+        let ui = self.ui();
+        let mut settings = self.settings.borrow_mut();
+        settings.theme = match ui.get_theme_index() {
+            1 => Theme::Dark,
+            2 => Theme::Light,
+            _ => Theme::System,
+        };
+        settings.sidebar_collapsed = ui.get_sidebar_collapsed();
+        settings.auto_start = ui.get_auto_start();
+        settings.mirror_deletions = ui.get_mirror_deletions();
+        settings.ignore = parse_patterns(&ui.get_global_ignore());
+        let profile = settings.active_mut();
+        profile.name = profile_name(&ui.get_profile_name());
+        profile.config = collect_config(&ui);
+    }
+
+    /// Captura a tela e salva em disco.
+    fn persist(&self) {
+        self.capture();
+        let Some(store) = &self.store else {
+            return;
+        };
+        let ui = self.ui();
+        match store.save(&self.settings.borrow()) {
+            Ok(notices) => notices
+                .into_iter()
+                .for_each(|notice| push_log(&ui, CoreLogLevel::Info, notice)),
+            Err(error) => push_log(
+                &ui,
                 CoreLogLevel::Error,
-                format!("Falha ao abrir configurações: {error}"),
-            );
-            projects.push(ProjectRow::default());
-            return None;
+                format!("Falha ao salvar configurações: {error}"),
+            ),
         }
-    };
-    match store.load() {
-        Ok(loaded) => {
-            let config = loaded.config;
-            ui.set_host(config.host.into());
-            ui.set_user(config.user.into());
-            ui.set_password(config.password.into());
-            ui.set_port(config.port.to_string().into());
-            ui.set_secure(config.secure);
-            for project in config.projects {
-                projects.push(ProjectRow {
-                    local: project.local.to_string_lossy().as_ref().into(),
-                    remote: project.remote.into(),
-                });
-            }
-            for notice in loaded.notices {
-                push_log(ui, CoreLogLevel::Info, notice);
-            }
+    }
+
+    /// Sai da tela de configurações, se aberta. Retorna `false` (e avisa)
+    /// se os padrões ignorados globais forem inválidos.
+    fn leave_settings(&self) -> bool {
+        let ui = self.ui();
+        if !ui.get_settings_open() {
+            return true;
         }
-        Err(error) => push_log(
-            ui,
-            CoreLogLevel::Error,
-            format!("Falha ao carregar configurações: {error}"),
-        ),
+        if let Err(error) = check_patterns(&parse_patterns(&ui.get_global_ignore())) {
+            ui.set_notice(error.to_string().into());
+            return false;
+        }
+        ui.set_settings_open(false);
+        true
     }
-    if projects.row_count() == 0 {
-        projects.push(ProjectRow::default());
+
+    /// Adiciona um perfil, torna-o ativo e salva.
+    fn add_profile(&self, name: String, config: Config) {
+        if !self.leave_settings() {
+            return;
+        }
+        self.capture();
+        {
+            let mut settings = self.settings.borrow_mut();
+            let id = settings.new_profile_id();
+            settings.profiles.push(Profile {
+                id: id.clone(),
+                name,
+                config,
+            });
+            settings.active_profile = id;
+        }
+        self.show_profiles();
+        self.persist();
     }
-    Some(Arc::new(store))
+}
+
+fn profile_name(text: &str) -> String {
+    match text.trim() {
+        "" => "Sem nome".to_string(),
+        name => name.to_string(),
+    }
+}
+
+fn profile_entry(profile: &Profile) -> ProfileEntry {
+    ProfileEntry {
+        name: profile.name.as_str().into(),
+        initial: initial(&profile.name).into(),
+        detail: profile.config.host.as_str().into(),
+    }
+}
+
+/// Primeira letra ou dígito do nome, em maiúscula.
+fn initial(name: &str) -> String {
+    name.chars()
+        .find(|character| character.is_alphanumeric())
+        .map(|character| character.to_uppercase().collect())
+        .unwrap_or_else(|| "?".to_string())
+}
+
+fn project_row(project: &Project) -> ProjectRow {
+    ProjectRow {
+        local: project.local.to_string_lossy().as_ref().into(),
+        remote: project.remote.as_str().into(),
+        enabled: project.enabled,
+        ignore: project.ignore.join("\n").into(),
+        ignore_count: project.ignore.len() as i32,
+    }
 }
 
 fn create_engine(ui: &AppWindow) -> SharedEngine {
@@ -185,12 +356,32 @@ fn collect_config(ui: &AppWindow) -> Config {
         .map(|row| Project {
             local: PathBuf::from(row.local.trim()),
             remote: row.remote.trim().to_string(),
+            enabled: row.enabled,
+            ignore: parse_patterns(&row.ignore),
         })
         .collect();
     Config {
         projects,
         ..collect_connection(ui)
     }
+}
+
+/// Abre uma pasta ou um link no aplicativo padrão do sistema.
+fn open_external(weak: &Weak<AppWindow>, target: &std::ffi::OsStr) {
+    if let Err(error) = open::that_detached(target) {
+        weak.unwrap().set_notice(
+            format!(
+                "Não foi possível abrir {}: {error}",
+                target.to_string_lossy()
+            )
+            .into(),
+        );
+    }
+}
+
+/// Confere a sintaxe dos padrões antes de aceitá-los.
+fn check_patterns(patterns: &[String]) -> sync_core::Result<()> {
+    IgnoreRules::new(Path::new("/"), &[], patterns).map(|_| ())
 }
 
 fn register_connection_callbacks(ui: &AppWindow) {
@@ -235,36 +426,32 @@ fn register_connection_callbacks(ui: &AppWindow) {
     });
 }
 
-fn register_sync_callbacks(ui: &AppWindow, engine: &SharedEngine, store: Option<Arc<ConfigStore>>) {
+fn register_sync_callbacks(ui: &AppWindow, app: &Rc<App>, engine: &SharedEngine) {
     ui.on_start_sync({
-        let weak = ui.as_weak();
+        let app = app.clone();
         let engine = engine.clone();
         move || {
-            let ui = weak.unwrap();
-            let config = match validate::config(&collect_config(&ui)) {
+            let ui = app.ui();
+            app.persist();
+            let (config, options) = {
+                let settings = app.settings.borrow();
+                (
+                    validate::config(&settings.active().config),
+                    settings.sync_options(),
+                )
+            };
+            let config = match config {
                 Ok(config) => config,
                 Err(error) => {
                     push_log(&ui, CoreLogLevel::Error, error.to_string());
                     return ui.set_notice(error.to_string().into());
                 }
             };
-            if let Some(store) = &store {
-                match store.save(&config) {
-                    Ok(notices) => notices
-                        .into_iter()
-                        .for_each(|notice| push_log(&ui, CoreLogLevel::Info, notice)),
-                    Err(error) => push_log(
-                        &ui,
-                        CoreLogLevel::Error,
-                        format!("Falha ao salvar configurações: {error}"),
-                    ),
-                }
-            }
             ui.set_busy(true);
-            let weak = weak.clone();
+            let weak = ui.as_weak();
             let engine = engine.clone();
             thread::spawn(move || {
-                let result = lock(&engine).start(config);
+                let result = lock(&engine).start(config, options);
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_busy(false);
                     if let Err(error) = result {
@@ -292,6 +479,90 @@ fn register_sync_callbacks(ui: &AppWindow, engine: &SharedEngine, store: Option<
     });
 }
 
+fn register_profile_callbacks(ui: &AppWindow, app: &Rc<App>) {
+    ui.on_profile_selected({
+        let app = app.clone();
+        move |index| {
+            if !app.leave_settings() {
+                return;
+            }
+            // Guarda as edições no perfil que estava ativo antes de trocar.
+            app.capture();
+            {
+                let mut settings = app.settings.borrow_mut();
+                let Some(profile) = settings.profiles.get(index as usize) else {
+                    return;
+                };
+                settings.active_profile = profile.id.clone();
+            }
+            app.show_profiles();
+            app.persist();
+        }
+    });
+    ui.on_profile_renamed({
+        let app = app.clone();
+        move |text| {
+            let index = app.settings.borrow().active_index();
+            if let Some(mut entry) = app.profiles.row_data(index) {
+                let name = profile_name(&text);
+                entry.initial = initial(&name).into();
+                entry.name = name.into();
+                app.profiles.set_row_data(index, entry);
+            }
+        }
+    });
+    ui.on_add_profile({
+        let app = app.clone();
+        move || app.add_profile("Novo perfil".to_string(), Config::default())
+    });
+    ui.on_duplicate_profile({
+        let app = app.clone();
+        move || {
+            app.capture();
+            let active = app.settings.borrow().active().clone();
+            app.add_profile(format!("{} (cópia)", active.name), active.config);
+        }
+    });
+    ui.on_delete_profile({
+        let app = app.clone();
+        move || {
+            let name = profile_name(&app.ui().get_profile_name());
+            app.ui().set_confirm_text(
+                format!(
+                    "Excluir o perfil \"{name}\"? A credencial e a lista de projetos dele serão apagadas."
+                )
+                .into(),
+            );
+        }
+    });
+    ui.on_confirm_accepted({
+        let app = app.clone();
+        move || {
+            app.ui().set_confirm_text(SharedString::new());
+            let removed = {
+                let mut settings = app.settings.borrow_mut();
+                if settings.profiles.len() <= 1 {
+                    return;
+                }
+                let index = settings.active_index();
+                let removed = settings.profiles.remove(index);
+                let next = index.min(settings.profiles.len() - 1);
+                settings.active_profile = settings.profiles[next].id.clone();
+                removed
+            };
+            if let Some(store) = &app.store {
+                store.delete_secret(&removed.id);
+            }
+            app.show_profiles();
+            app.persist();
+        }
+    });
+    ui.on_confirm_cancelled({
+        let weak = ui.as_weak();
+        move || weak.unwrap().set_confirm_text(SharedString::new())
+    });
+}
+
 fn update_row(projects: &VecModel<ProjectRow>, index: usize, update: impl FnOnce(&mut ProjectRow)) {
     if let Some(mut row) = projects.row_data(index) {
         update(&mut row);
@@ -299,10 +570,11 @@ fn update_row(projects: &VecModel<ProjectRow>, index: usize, update: impl FnOnce
     }
 }
 
-fn register_project_callbacks(ui: &AppWindow, projects: &Rc<VecModel<ProjectRow>>) {
+fn register_project_callbacks(ui: &AppWindow, app: &Rc<App>) {
+    let projects = &app.projects;
     ui.on_add_project({
         let projects = projects.clone();
-        move || projects.push(ProjectRow::default())
+        move || projects.push(project_row(&Project::default()))
     });
     ui.on_remove_project({
         let projects = projects.clone();
@@ -316,6 +588,10 @@ fn register_project_callbacks(ui: &AppWindow, projects: &Rc<VecModel<ProjectRow>
     ui.on_remote_edited({
         let projects = projects.clone();
         move |index, text| update_row(&projects, index as usize, |row| row.remote = text)
+    });
+    ui.on_project_toggled({
+        let projects = projects.clone();
+        move |index, enabled| update_row(&projects, index as usize, |row| row.enabled = enabled)
     });
     ui.on_select_local({
         let projects = projects.clone();
@@ -331,6 +607,74 @@ fn register_project_callbacks(ui: &AppWindow, projects: &Rc<VecModel<ProjectRow>
                     update_row(&projects, index as usize, |row| row.local = local);
                 }
             });
+        }
+    });
+
+    // Editor dos padrões ignorados de um projeto.
+    let target = Rc::new(Cell::new(0usize));
+    ui.on_open_ignore({
+        let weak = ui.as_weak();
+        let projects = projects.clone();
+        let target = target.clone();
+        move |index| {
+            let ui = weak.unwrap();
+            let Some(row) = projects.row_data(index as usize) else {
+                return;
+            };
+            let title = Path::new(row.local.as_str())
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "projeto".to_string());
+            target.set(index as usize);
+            ui.set_ignore_title(title.into());
+            ui.set_ignore_text(row.ignore);
+            ui.set_ignore_open(true);
+        }
+    });
+    ui.on_save_ignore({
+        let weak = ui.as_weak();
+        let projects = projects.clone();
+        move || {
+            let ui = weak.unwrap();
+            let patterns = parse_patterns(&ui.get_ignore_text());
+            if let Err(error) = check_patterns(&patterns) {
+                return ui.set_notice(error.to_string().into());
+            }
+            update_row(&projects, target.get(), |row| {
+                row.ignore = patterns.join("\n").into();
+                row.ignore_count = patterns.len() as i32;
+            });
+            ui.set_ignore_open(false);
+        }
+    });
+}
+
+fn register_settings_callbacks(ui: &AppWindow) {
+    ui.on_open_config_folder({
+        let weak = ui.as_weak();
+        move || {
+            let Some(folder) = ConfigStore::open_default()
+                .ok()
+                .and_then(|store| store.path().parent().map(Path::to_path_buf))
+            else {
+                return;
+            };
+            // A pasta só existe depois do primeiro salvamento.
+            let _ = std::fs::create_dir_all(&folder);
+            open_external(&weak, folder.as_os_str());
+        }
+    });
+    ui.on_open_repository({
+        let weak = ui.as_weak();
+        move || open_external(&weak, env!("CARGO_PKG_REPOSITORY").as_ref())
+    });
+    ui.on_clear_logs({
+        let weak = ui.as_weak();
+        move || {
+            let logs = weak.unwrap().get_logs();
+            if let Some(logs) = logs.as_any().downcast_ref::<VecModel<LogEntry>>() {
+                logs.set_vec(Vec::new());
+            }
         }
     });
 }
@@ -385,7 +729,8 @@ impl RemotePicker {
     }
 }
 
-fn register_remote_picker(ui: &AppWindow, projects: &Rc<VecModel<ProjectRow>>) {
+fn register_remote_picker(ui: &AppWindow, app: &Rc<App>) {
+    let projects = &app.projects;
     let picker = Rc::new(RemotePicker {
         weak: ui.as_weak(),
         target: Cell::new(0),
@@ -439,4 +784,277 @@ fn register_remote_picker(ui: &AppWindow, projects: &Rc<VecModel<ProjectRow>>) {
         }
     });
     ui.on_picker_cancel(move || picker.close());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use std::collections::HashMap;
+    use sync_core::config::SecretStore;
+
+    /// Cofre em memória, compartilhado entre os stores de um mesmo teste.
+    /// Os testes nunca tocam no cofre real do sistema.
+    #[derive(Clone, Default)]
+    struct MemorySecrets(Arc<Mutex<HashMap<String, String>>>);
+
+    impl SecretStore for MemorySecrets {
+        fn get(&self, account: &str) -> std::result::Result<Option<String>, String> {
+            Ok(self.0.lock().unwrap().get(account).cloned())
+        }
+        fn set(&self, account: &str, secret: &str) -> std::result::Result<(), String> {
+            self.0.lock().unwrap().insert(account.into(), secret.into());
+            Ok(())
+        }
+        fn delete(&self, account: &str) -> std::result::Result<(), String> {
+            self.0.lock().unwrap().remove(account);
+            Ok(())
+        }
+    }
+
+    struct Fixture {
+        ui: AppWindow,
+        app: Rc<App>,
+        dir: tempfile::TempDir,
+        secrets: MemorySecrets,
+    }
+
+    impl Fixture {
+        /// Abre a janela (sem exibir) com um projeto existente no perfil padrão.
+        fn new() -> Self {
+            i_slint_backend_testing::init_no_event_loop();
+            let dir = tempfile::tempdir().unwrap();
+            let secrets = MemorySecrets::default();
+            let project_dir = dir.path().join("site");
+            std::fs::create_dir_all(&project_dir).unwrap();
+            let mut settings = Settings::default();
+            settings.active_mut().config = Config {
+                host: "ftp.producao".into(),
+                user: "deploy".into(),
+                password: "senha-producao".into(),
+                projects: vec![Project {
+                    local: project_dir,
+                    remote: "/web/site".into(),
+                    ..Project::default()
+                }],
+                ..Config::default()
+            };
+            let store = store(dir.path(), &secrets);
+            store.save(&settings).unwrap();
+
+            let ui = AppWindow::new().unwrap();
+            // As listas só criam as linhas que cabem na janela.
+            ui.window().set_size(slint::LogicalSize::new(1120.0, 780.0));
+            ui.set_logs(Rc::new(VecModel::<LogEntry>::default()).into());
+            let app = App::load(&ui, Ok(store));
+            register_profile_callbacks(&ui, &app);
+            register_project_callbacks(&ui, &app);
+            register_settings_callbacks(&ui);
+            Self {
+                ui,
+                app,
+                dir,
+                secrets,
+            }
+        }
+
+        /// O que está salvo em disco, lido por um store novo.
+        fn saved(&self) -> Settings {
+            store(self.dir.path(), &self.secrets)
+                .load()
+                .unwrap()
+                .settings
+        }
+
+        /// Aciona o botão ou interruptor com esse rótulo (textos com o mesmo
+        /// conteúdo, como o balão de dica, também têm o rótulo e são ignorados).
+        fn click(&self, label: &str) {
+            let control = ElementHandle::find_by_accessible_label(&self.ui, label)
+                .find(|element| {
+                    matches!(
+                        element.accessible_role(),
+                        Some(AccessibleRole::Button | AccessibleRole::Checkbox)
+                    )
+                })
+                .unwrap_or_else(|| panic!("nenhum controle com rótulo {label:?}"));
+            control.invoke_accessible_default_action();
+        }
+    }
+
+    fn store(dir: &Path, secrets: &MemorySecrets) -> ConfigStore {
+        ConfigStore::new(dir.join("config.json"), None, Box::new(secrets.clone()))
+    }
+
+    #[test]
+    fn perfis_guardam_credenciais_e_projetos_separados() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        assert_eq!(ui.get_host(), "ftp.producao");
+
+        fixture.click("Novo perfil");
+        assert_eq!(fixture.app.profiles.row_count(), 2);
+        assert_eq!(ui.get_profile_index(), 1);
+        assert_eq!(ui.get_host(), "", "perfil novo começa vazio");
+        ui.set_profile_name("Homologação".into());
+        ui.invoke_profile_renamed("Homologação".into());
+        let entry = fixture.app.profiles.row_data(1).unwrap();
+        assert_eq!(
+            (entry.name.as_str(), entry.initial.as_str()),
+            ("Homologação", "H")
+        );
+        ui.set_host("ftp.homolog".into());
+        ui.set_password("senha-homolog".into());
+
+        // Voltar ao primeiro perfil (pela barra lateral) guarda as edições do segundo.
+        fixture.click("Padrão");
+        assert_eq!(ui.get_host(), "ftp.producao");
+        assert_eq!(ui.get_password(), "senha-producao");
+        assert_eq!(fixture.app.projects.row_count(), 1);
+
+        let saved = fixture.saved();
+        assert_eq!(saved.profiles.len(), 2);
+        assert_eq!(saved.active_profile, saved.profiles[0].id);
+        let homolog = &saved.profiles[1];
+        assert_eq!(homolog.name, "Homologação");
+        assert_eq!(homolog.config.host, "ftp.homolog");
+        assert_eq!(homolog.config.password, "senha-homolog");
+        let config = std::fs::read_to_string(fixture.dir.path().join("config.json")).unwrap();
+        assert!(!config.contains("senha-"), "senhas ficam no cofre");
+    }
+
+    #[test]
+    fn duplicar_e_excluir_perfil() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        fixture.click("Duplicar perfil");
+        assert_eq!(ui.get_profile_name(), "Padrão (cópia)");
+        assert_eq!(ui.get_host(), "ftp.producao");
+        assert_eq!(fixture.app.projects.row_count(), 1);
+
+        // Exclusão pede confirmação; cancelar não apaga nada.
+        fixture.click("Excluir perfil");
+        assert!(ui.get_confirm_text().contains("Padrão (cópia)"));
+        ui.invoke_confirm_cancelled();
+        assert_eq!(fixture.saved().profiles.len(), 2);
+
+        fixture.click("Excluir perfil");
+        ui.invoke_confirm_accepted();
+        assert_eq!(ui.get_confirm_text(), "");
+        assert_eq!(ui.get_profile_name(), "Padrão");
+        let saved = fixture.saved();
+        assert_eq!(saved.profiles.len(), 1);
+        assert_eq!(saved.active().config.password, "senha-producao");
+    }
+
+    #[test]
+    fn projeto_desativado_e_padroes_ignorados_sao_salvos() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        ui.invoke_project_toggled(0, false);
+        ui.invoke_open_ignore(0);
+        assert!(ui.get_ignore_open());
+        assert_eq!(ui.get_ignore_title(), "site");
+        ui.set_ignore_text("*.log\n\nvendor/\n".into());
+        ui.invoke_save_ignore();
+        assert!(!ui.get_ignore_open());
+        assert_eq!(fixture.app.projects.row_data(0).unwrap().ignore_count, 2);
+
+        fixture.app.persist();
+        let saved = fixture.saved();
+        let project = &saved.active().config.projects[0];
+        assert!(!project.enabled);
+        assert_eq!(project.ignore, vec!["*.log", "vendor/"]);
+    }
+
+    #[test]
+    fn padrao_invalido_mantem_o_editor_aberto() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        ui.invoke_open_ignore(0);
+        ui.set_ignore_text("{a,b".into());
+        ui.invoke_save_ignore();
+        assert!(ui.get_ignore_open());
+        assert!(ui.get_notice().contains("inválido"));
+        assert_eq!(fixture.app.projects.row_data(0).unwrap().ignore_count, 0);
+    }
+
+    #[test]
+    fn configuracoes_gerais_sao_salvas_ao_voltar_ao_perfil() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        fixture.click("Configurações");
+        assert!(ui.get_settings_open());
+        fixture.click("Claro");
+        assert_eq!(ui.get_theme_index(), 2);
+        fixture.click("Iniciar sincronização ao abrir o app");
+        fixture.click("Espelhar exclusões no servidor");
+
+        // Padrão inválido: continua nas configurações.
+        ui.set_global_ignore("{a,b".into());
+        fixture.click("Padrão");
+        assert!(ui.get_settings_open());
+        assert!(ui.get_notice().contains("inválido"));
+        ui.set_notice(SharedString::new());
+
+        ui.set_global_ignore("node_modules/\n*.tmp".into());
+        fixture.click("Padrão");
+        assert!(!ui.get_settings_open());
+
+        let saved = fixture.saved();
+        assert_eq!(saved.theme, Theme::Light);
+        assert!(saved.auto_start);
+        assert!(!saved.mirror_deletions);
+        assert_eq!(saved.ignore, vec!["node_modules/", "*.tmp"]);
+    }
+
+    #[test]
+    fn barra_lateral_recolhe_e_lembra_o_estado() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        fixture.click("Recolher menu");
+        assert!(ui.get_sidebar_collapsed());
+        // Recolhida, os perfis e as ações continuam acessíveis.
+        fixture.click("Configurações");
+        assert!(ui.get_settings_open());
+        fixture.click("Padrão");
+        assert!(!ui.get_settings_open());
+        assert!(fixture.saved().sidebar_collapsed);
+
+        fixture.click("Expandir menu");
+        assert!(!ui.get_sidebar_collapsed());
+        fixture.app.persist();
+        assert!(!fixture.saved().sidebar_collapsed);
+    }
+
+    #[test]
+    fn acoes_principais_tem_botoes_acessiveis() {
+        let fixture = Fixture::new();
+        for label in [
+            "Iniciar sincronização",
+            "Novo perfil",
+            "Duplicar perfil",
+            "Nome do perfil",
+            "FTPS",
+            "Monitorar este projeto",
+            "Configurações",
+            "Testar conexão",
+            "Adicionar projeto",
+            "Selecionar pasta local",
+            "Escolher pasta no FTP",
+            "Arquivos ignorados",
+            "Remover projeto",
+            "Limpar logs",
+        ] {
+            assert!(
+                ElementHandle::find_by_accessible_label(&fixture.ui, label)
+                    .next()
+                    .is_some(),
+                "botão {label:?} não encontrado"
+            );
+        }
+        fixture.click("Adicionar projeto");
+        assert_eq!(fixture.app.projects.row_count(), 2);
+        fixture.click("Remover projeto");
+        assert_eq!(fixture.app.projects.row_count(), 1);
+    }
 }

@@ -23,6 +23,7 @@ use notify_debouncer_full::{
 };
 
 use crate::ftp::FtpClient;
+use crate::ignore_rules::{DEFAULT_PATTERNS, IgnoreRules};
 use crate::{Config, Error, Result, remote_path};
 
 pub const MAX_PENDING_TASKS: usize = 10_000;
@@ -34,7 +35,27 @@ const RETRY_DELAYS: [Duration; 3] = [
 /// Aguarda o arquivo parar de mudar antes de enviar.
 const DEBOUNCE: Duration = Duration::from_millis(800);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(60);
-const IGNORED_NAMES: [&str; 4] = ["node_modules", ".git", ".vscode", "desktop.ini"];
+
+/// Preferências gerais que afetam a sincronização de todos os projetos.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncOptions {
+    /// Apaga no servidor o que foi apagado localmente.
+    pub mirror_deletions: bool,
+    /// Padrões ignorados em todos os projetos (formato `.gitignore`).
+    pub ignore: Vec<String>,
+}
+
+impl Default for SyncOptions {
+    fn default() -> Self {
+        Self {
+            mirror_deletions: true,
+            ignore: DEFAULT_PATTERNS
+                .iter()
+                .map(|item| item.to_string())
+                .collect(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogLevel {
@@ -166,17 +187,30 @@ impl SyncEngine {
     }
 
     /// Conecta ao FTP e começa a monitorar as pastas. Bloqueia durante a conexão.
-    pub fn start(&mut self, config: Config) -> Result<()> {
-        self.start_with(config, Box::new(FtpClient::default()))
+    pub fn start(&mut self, config: Config, options: SyncOptions) -> Result<()> {
+        self.start_with(config, options, Box::new(FtpClient::default()))
     }
 
-    pub fn start_with(&mut self, config: Config, mut remote: Box<dyn Remote>) -> Result<()> {
+    pub fn start_with(
+        &mut self,
+        config: Config,
+        options: SyncOptions,
+        mut remote: Box<dyn Remote>,
+    ) -> Result<()> {
         self.stop_silently();
         self.log(LogLevel::Info, "Iniciando serviço...");
         if config.projects.is_empty() {
             self.log(LogLevel::Error, "Nenhuma pasta configurada!");
             return Err(Error::invalid("Nenhuma pasta configurada!"));
         }
+        let rules = config
+            .projects
+            .iter()
+            .map(|project| {
+                IgnoreRules::new(&project.local, &options.ignore, &project.ignore).map(Arc::new)
+            })
+            .collect::<Result<Vec<_>>>()
+            .inspect_err(|error| self.log(LogLevel::Error, error.to_string()))?;
         if let Err(error) = remote.connect(&config) {
             self.log(LogLevel::Error, format!("Erro FTP: {error}"));
             return Err(error);
@@ -186,7 +220,13 @@ impl SyncEngine {
         let (sender, receiver) = mpsc::channel();
         let mut debouncers = Vec::with_capacity(config.projects.len());
         for (index, project) in config.projects.iter().enumerate() {
-            match watch(index, &project.local, sender.clone(), self.listener.clone()) {
+            match watch(
+                index,
+                &project.local,
+                rules[index].clone(),
+                sender.clone(),
+                self.listener.clone(),
+            ) {
                 Ok(debouncer) => debouncers.push(debouncer),
                 Err(error) => {
                     remote.disconnect();
@@ -203,6 +243,8 @@ impl SyncEngine {
         let count = config.projects.len();
         let worker = Worker {
             config,
+            mirror_deletions: options.mirror_deletions,
+            rules,
             remote,
             receiver,
             stopped: stopped.clone(),
@@ -257,17 +299,19 @@ impl Drop for SyncEngine {
 fn watch(
     project: usize,
     root: &Path,
+    rules: Arc<IgnoreRules>,
     sender: Sender<Message>,
     listener: Listener,
 ) -> Result<Debouncer<RecommendedWatcher, RecommendedCache>> {
     let root_display = root.display().to_string();
+    let root_path = root.to_path_buf();
     let mut debouncer =
         new_debouncer(
             DEBOUNCE,
             None,
             move |result: DebounceEventResult| match result {
                 Ok(events) => {
-                    let changes = events_to_changes(&events);
+                    let changes = events_to_changes(&events, &root_path, &rules);
                     if !changes.is_empty() {
                         let _ = sender.send(Message::Changes(project, changes));
                     }
@@ -288,7 +332,7 @@ fn watch(
     Ok(debouncer)
 }
 
-fn events_to_changes(events: &[DebouncedEvent]) -> Vec<Change> {
+fn events_to_changes(events: &[DebouncedEvent], root: &Path, rules: &IgnoreRules) -> Vec<Change> {
     let mut changes: Vec<Change> = Vec::new();
     for event in events {
         let kind = event.event.kind;
@@ -300,7 +344,7 @@ fn events_to_changes(events: &[DebouncedEvent]) -> Vec<Change> {
             EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
         );
         for path in &event.event.paths {
-            if is_ignored(path) {
+            if rules.is_ignored(root, path) {
                 continue;
             }
             match changes.iter_mut().find(|change| &change.path == path) {
@@ -315,30 +359,26 @@ fn events_to_changes(events: &[DebouncedEvent]) -> Vec<Change> {
     changes
 }
 
-pub fn is_ignored(path: &Path) -> bool {
-    path.components().any(|component| {
-        let name = component.as_os_str().to_string_lossy();
-        IGNORED_NAMES
-            .iter()
-            .any(|ignored| name.eq_ignore_ascii_case(ignored))
-    })
-}
-
 fn display_relative(relative: &Path) -> String {
     relative.to_string_lossy().replace('\\', "/")
 }
 
 /// Arquivos dentro de uma pasta (recursivo), sem seguir links simbólicos.
-fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+fn collect_files(
+    dir: &Path,
+    root: &Path,
+    rules: &IgnoreRules,
+    files: &mut Vec<PathBuf>,
+) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if is_ignored(Path::new(&entry.file_name())) {
+        if rules.is_ignored(root, &path) {
             continue;
         }
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            collect_files(&path, files)?;
+            collect_files(&path, root, rules, files)?;
         } else if file_type.is_file() {
             files.push(path);
         }
@@ -348,6 +388,9 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
 
 struct Worker {
     config: Config,
+    mirror_deletions: bool,
+    /// Regras de cada projeto, na mesma ordem de `config.projects`.
+    rules: Vec<Arc<IgnoreRules>>,
     remote: Box<dyn Remote>,
     receiver: Receiver<Message>,
     stopped: Arc<AtomicBool>,
@@ -471,6 +514,10 @@ impl Worker {
 
     fn execute(&mut self, task: &Task) -> Result<()> {
         let project = &self.config.projects[task.project];
+        let rules = &self.rules[task.project];
+        if rules.is_ignored(&project.local, &task.path) {
+            return Ok(());
+        }
         let relative = task
             .path
             .strip_prefix(&project.local)
@@ -487,7 +534,7 @@ impl Worker {
             }
             Ok(metadata) if metadata.is_dir() && task.scan_dir => {
                 let mut files = Vec::new();
-                collect_files(&task.path, &mut files)?;
+                collect_files(&task.path, &project.local, rules, &mut files)?;
                 self.log(
                     LogLevel::Info,
                     format!("[Pasta] {shown} ({} arquivo(s))", files.len()),
@@ -513,6 +560,10 @@ impl Worker {
                     )));
                 }
                 if relative.as_os_str().is_empty() {
+                    return Ok(());
+                }
+                if !self.mirror_deletions {
+                    self.log(LogLevel::Info, format!("[Exclusão não espelhada] {shown}"));
                     return Ok(());
                 }
                 self.log(LogLevel::Info, format!("[Remover] {shown}"));
@@ -576,15 +627,6 @@ mod tests {
         assert!(!queue.push(0, change("/p/extra", false)));
     }
 
-    #[test]
-    fn ignora_pastas_de_ferramentas() {
-        assert!(is_ignored(Path::new("/p/node_modules/x/index.js")));
-        assert!(is_ignored(Path::new("/p/.git/HEAD")));
-        assert!(is_ignored(Path::new("/p/Desktop.ini")));
-        assert!(!is_ignored(Path::new("/p/.gitignore")));
-        assert!(!is_ignored(Path::new("/p/src/git.js")));
-    }
-
     /// Registra as operações remotas em memória.
     #[derive(Clone, Default)]
     struct FakeRemote {
@@ -644,11 +686,14 @@ mod tests {
             projects: vec![Project {
                 local: root.clone(),
                 remote: "/site".into(),
+                ..Project::default()
             }],
             ..Config::default()
         };
         let mut engine = SyncEngine::new(Arc::new(|_| {}));
-        engine.start_with(config, Box::new(remote)).unwrap();
+        engine
+            .start_with(config, SyncOptions::default(), Box::new(remote))
+            .unwrap();
         thread::sleep(Duration::from_millis(300));
 
         fs::write(root.join("index.html"), "<h1>oi</h1>").unwrap();
@@ -673,6 +718,49 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|operation| operation.contains("node_modules"))
+        );
+    }
+
+    /// Padrões do projeto e exclusões desativadas, também com o observador real.
+    #[test]
+    fn respeita_padroes_do_projeto_e_nao_espelha_exclusoes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::write(root.join("existente.php"), "<?php").unwrap();
+        let remote = FakeRemote::default();
+        let operations = remote.operations.clone();
+        let config = Config {
+            projects: vec![Project {
+                local: root.clone(),
+                remote: "/site".into(),
+                ignore: vec!["*.log".into(), "cache/".into()],
+                ..Project::default()
+            }],
+            ..Config::default()
+        };
+        let options = SyncOptions {
+            mirror_deletions: false,
+            ..SyncOptions::default()
+        };
+        let mut engine = SyncEngine::new(Arc::new(|_| {}));
+        engine
+            .start_with(config, options, Box::new(remote))
+            .unwrap();
+        thread::sleep(Duration::from_millis(300));
+
+        fs::write(root.join("erro.log"), "x").unwrap();
+        fs::create_dir_all(root.join("cache")).unwrap();
+        fs::write(root.join("cache/a.php"), "x").unwrap();
+        fs::remove_file(root.join("existente.php")).unwrap();
+        // Arquivo enviado por último: quando ele chega, os anteriores já foram processados.
+        thread::sleep(Duration::from_millis(1200));
+        fs::write(root.join("index.php"), "<?php").unwrap();
+        wait_for(&operations, "upload /site/index.php");
+
+        engine.stop();
+        assert_eq!(
+            *operations.lock().unwrap(),
+            vec!["upload /site/index.php".to_string()]
         );
     }
 }

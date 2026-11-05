@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 dirs = "7.0.0"
+ignore = "0.4.34"
 keyring = "4.2.0"
 log = "0.4.35"
 notify = "8.2.1"

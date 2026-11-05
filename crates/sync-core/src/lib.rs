@@ -8,11 +8,12 @@ pub mod config;
 pub mod engine;
 pub mod error;
 pub mod ftp;
+pub mod ignore_rules;
 pub mod remote_path;
 pub mod validate;
 
-pub use config::{Config, ConfigStore, Project};
-pub use engine::{EngineEvent, LogLevel, SyncEngine};
+pub use config::{Config, ConfigStore, Profile, Project, Settings, Theme};
+pub use engine::{EngineEvent, LogLevel, SyncEngine, SyncOptions};
 pub use error::{Error, Result};
 
 /// Identificador usado no nome do executável, no `app_id` do Wayland,
