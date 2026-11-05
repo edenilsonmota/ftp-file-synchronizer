@@ -33,6 +33,9 @@ pub enum Message {
     QueueFull {
         path: String,
     },
+    RetryingFailed {
+        count: usize,
+    },
     RetryFailed {
         attempt: usize,
         reason: Box<Message>,
@@ -137,6 +140,11 @@ impl fmt::Display for Message {
                 )
             }
             Self::QueueFull { path } => write!(f, "Queue is full; change not queued: {path}"),
+            Self::RetryingFailed { count } => write!(
+                f,
+                "Retrying {}...",
+                plural(*count, "failed file", "failed files")
+            ),
             Self::RetryFailed { attempt, reason } => {
                 write!(f, "Attempt {attempt} failed; reconnecting: {reason}")
             }

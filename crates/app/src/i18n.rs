@@ -106,6 +106,10 @@ fn portuguese(message: &Message) -> String {
             format!("Fila concluída com {}.", plural(*count, "erro", "erros"))
         }
         QueueFull { path } => format!("Fila cheia; alteração não enfileirada: {path}"),
+        RetryingFailed { count } => format!(
+            "Tentando novamente {}...",
+            plural(*count, "arquivo que falhou", "arquivos que falharam")
+        ),
         RetryFailed { attempt, reason } => format!(
             "Tentativa {attempt} falhou; reconectando: {}",
             portuguese(reason)
@@ -171,6 +175,10 @@ fn spanish(message: &Message) -> String {
             format!("Cola terminada con {}.", plural(*count, "error", "errores"))
         }
         QueueFull { path } => format!("Cola llena; cambio no agregado: {path}"),
+        RetryingFailed { count } => format!(
+            "Reintentando {}...",
+            plural(*count, "archivo con error", "archivos con error")
+        ),
         RetryFailed { attempt, reason } => format!(
             "El intento {attempt} falló; reconectando: {}",
             spanish(reason)
@@ -225,7 +233,10 @@ pub enum Text {
     LoadSettingsFailed(Message),
     OpenSettingsFailed(Message),
     SaveSettingsFailed(Message),
-    OpenFailed { target: String, reason: String },
+    OpenFailed {
+        target: String,
+        reason: String,
+    },
     TestingCredentials,
     CredentialsValid,
     ConnectionSucceeded,
@@ -234,14 +245,29 @@ pub enum Text {
     StartFailed(Message),
     ListFailed(Message),
     FillHostBeforeBrowsing,
-    ConfirmDeleteProfile { name: String },
-    CopyOf { name: String },
+    ConfirmDeleteProfile {
+        name: String,
+    },
+    CopyOf {
+        name: String,
+    },
     ChooseLocalFolder,
     ProjectFallback,
     Untitled,
     NewProfile,
     DefaultProfile,
+    /// Título do aviso de arquivos que falharam.
+    PendingTitle {
+        count: usize,
+    },
+    /// Os primeiros nomes e quantos faltam.
+    PendingFiles {
+        files: Vec<String>,
+    },
 }
+
+/// Quantos nomes de arquivo aparecem no aviso antes de "e mais N".
+const PENDING_NAMES: usize = 3;
 
 pub fn text(text: Text) -> String {
     use Text::*;
@@ -352,6 +378,34 @@ pub fn text(text: Text) -> String {
         Untitled => pick("Sem nome", "Untitled", "Sin nombre"),
         NewProfile => pick("Novo perfil", "New profile", "Nuevo perfil"),
         DefaultProfile => pick("Padrão", "Default", "Predeterminado"),
+        PendingTitle { count } => match count {
+            1 => pick(
+                "1 arquivo não foi enviado",
+                "1 file was not uploaded",
+                "1 archivo no se envió",
+            ),
+            _ => pick(
+                format!("{count} arquivos não foram enviados"),
+                format!("{count} files were not uploaded"),
+                format!("{count} archivos no se enviaron"),
+            ),
+        },
+        PendingFiles { files } => {
+            let names = files
+                .iter()
+                .take(PENDING_NAMES)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            match files.len().saturating_sub(PENDING_NAMES) {
+                0 => names,
+                more => pick(
+                    format!("{names} e mais {more}"),
+                    format!("{names} and {more} more"),
+                    format!("{names} y {more} más"),
+                ),
+            }
+        }
     }
 }
 
@@ -375,6 +429,31 @@ mod tests {
         }
         assert_eq!(from_index(-1), Language::En);
         assert_eq!(from_index(9), Language::En);
+    }
+
+    #[test]
+    fn aviso_de_pendentes_em_portugues_e_espanhol() {
+        let files: Vec<String> = (1..=4).map(|n| format!("{n}.php")).collect();
+        apply(Language::Pt);
+        assert_eq!(
+            text(Text::PendingTitle { count: 4 }),
+            "4 arquivos não foram enviados"
+        );
+        assert_eq!(
+            text(Text::PendingFiles {
+                files: files.clone()
+            }),
+            "1.php, 2.php, 3.php e mais 1"
+        );
+        apply(Language::Es);
+        assert_eq!(
+            text(Text::PendingTitle { count: 1 }),
+            "1 archivo no se envió"
+        );
+        assert_eq!(
+            text(Text::PendingFiles { files }),
+            "1.php, 2.php, 3.php y 1 más"
+        );
     }
 
     #[test]

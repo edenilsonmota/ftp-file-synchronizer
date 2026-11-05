@@ -208,3 +208,6 @@ msgstr "Copiar logs"
 
 msgid "Copied!"
 msgstr "Copiado!"
+
+msgid "Retry"
+msgstr "Tentar novamente"

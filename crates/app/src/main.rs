@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 use i18n::Text;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
@@ -24,6 +25,12 @@ use sync_core::{
 slint::include_modules!();
 
 const MAX_LOG_ENTRIES: usize = 500;
+/// Sem ação do usuário, o aviso de arquivos que falharam some depois disso.
+const PENDING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+thread_local! {
+    static PENDING_TIMER: slint::Timer = slint::Timer::default();
+}
 
 type SharedEngine = Arc<Mutex<SyncEngine>>;
 
@@ -309,7 +316,15 @@ fn create_engine(ui: &AppWindow) -> SharedEngine {
                 let _ = weak.upgrade_in_event_loop(move |ui| log_message(&ui, level, &message));
             }
             EngineEvent::Running(running) => {
-                let _ = weak.upgrade_in_event_loop(move |ui| ui.set_running(running));
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    ui.set_running(running);
+                    if !running {
+                        hide_pending(&ui);
+                    }
+                });
+            }
+            EngineEvent::Pending(files) => {
+                let _ = weak.upgrade_in_event_loop(move |ui| show_pending(&ui, files));
             }
             EngineEvent::WatchFailed(message) => {
                 let _ = weak.upgrade_in_event_loop(move |ui| {
@@ -323,6 +338,29 @@ fn create_engine(ui: &AppWindow) -> SharedEngine {
     ))));
     let _ = cell.set(engine.clone());
     engine
+}
+
+/// Mostra (ou esconde, se vazio) o aviso de arquivos que falharam.
+fn show_pending(ui: &AppWindow, files: Vec<String>) {
+    if files.is_empty() {
+        return hide_pending(ui);
+    }
+    ui.set_pending_title(i18n::text(Text::PendingTitle { count: files.len() }).into());
+    ui.set_pending_detail(i18n::text(Text::PendingFiles { files }).into());
+    ui.set_pending_visible(true);
+    let weak = ui.as_weak();
+    PENDING_TIMER.with(|timer| {
+        timer.start(slint::TimerMode::SingleShot, PENDING_TIMEOUT, move || {
+            if let Some(ui) = weak.upgrade() {
+                hide_pending(&ui);
+            }
+        })
+    });
+}
+
+fn hide_pending(ui: &AppWindow) {
+    ui.set_pending_visible(false);
+    PENDING_TIMER.with(slint::Timer::stop);
 }
 
 /// Mensagem do motor no log, no idioma atual.
@@ -488,6 +526,17 @@ fn register_sync_callbacks(ui: &AppWindow, app: &Rc<App>, engine: &SharedEngine)
                     }
                 });
             });
+        }
+    });
+
+    ui.on_retry_failed({
+        let weak = ui.as_weak();
+        let engine = engine.clone();
+        move || {
+            hide_pending(&weak.unwrap());
+            // Fora da thread da interface: o motor pode estar ocupado conectando.
+            let engine = engine.clone();
+            thread::spawn(move || lock(&engine).retry_failed());
         }
     });
 
@@ -1081,6 +1130,33 @@ mod tests {
         assert!(!ui.get_sidebar_collapsed());
         fixture.app.persist();
         assert!(!fixture.saved().sidebar_collapsed);
+    }
+
+    #[test]
+    fn aviso_de_arquivos_que_falharam() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        assert!(!ui.get_pending_visible());
+        let files = ["a.php", "css/app.css", "b.js", "c.js", "d.js"];
+        show_pending(ui, files.iter().map(|file| file.to_string()).collect());
+        assert!(ui.get_pending_visible());
+        assert_eq!(ui.get_pending_title(), "5 files were not uploaded");
+        assert_eq!(
+            ui.get_pending_detail(),
+            "a.php, css/app.css, b.js and 2 more"
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(ui, "Retry")
+                .next()
+                .is_some()
+        );
+
+        // Um único arquivo, depois tudo enviado.
+        show_pending(ui, vec!["index.php".into()]);
+        assert_eq!(ui.get_pending_title(), "1 file was not uploaded");
+        assert_eq!(ui.get_pending_detail(), "index.php");
+        show_pending(ui, Vec::new());
+        assert!(!ui.get_pending_visible());
     }
 
     #[test]

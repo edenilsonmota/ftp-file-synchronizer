@@ -42,6 +42,8 @@ global Icons {
     out property <image> play: @image-url("icons/play.svg");
     out property <image> plug: @image-url("icons/plug-zap.svg");
     out property <image> plus: @image-url("icons/plus.svg");
+    out property <image> retry: @image-url("icons/rotate-cw.svg");
+    out property <image> warning: @image-url("icons/triangle-alert.svg");
     out property <image> server: @image-url("icons/server.svg");
     out property <image> settings: @image-url("icons/settings.svg");
     out property <image> stop: @image-url("icons/square.svg");
@@ -863,6 +865,10 @@ export component AppWindow inherits Window {
     // Projetos e estado
     in property <[ProjectRow]> projects;
     in property <[LogEntry]> logs;
+    // Arquivos que falharam na sincronização.
+    in property <bool> pending-visible;
+    in property <string> pending-title;
+    in property <string> pending-detail;
     in property <bool> running;
     in property <bool> busy;
     property <bool> locked: root.running || root.busy;
@@ -930,6 +936,7 @@ export component AppWindow inherits Window {
     callback duplicate-profile();
     callback delete-profile();
     callback clear-logs();
+    callback retry-failed();
     /// Texto do log, em ordem cronológica, para a área de transferência.
     pure callback logs-text() -> string;
     callback open-config-folder();
@@ -1399,33 +1406,85 @@ export component AppWindow inherits Window {
                 Card {
                     vertical-stretch: 1;
                     min-height: 140px;
-                    if root.logs.length == 0: Text {
-                        text: @tr("Changes sent to the server show up here.");
-                        color: Style.muted;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                    ListView {
-                        for entry in root.logs: HorizontalLayout {
-                            padding-left: 14px;
-                            padding-right: 14px;
-                            padding-top: 3px;
-                            padding-bottom: 3px;
-                            spacing: 10px;
-                            Text {
-                                text: entry.time;
-                                font-size: 12px;
-                                color: Style.muted;
-                                vertical-alignment: top;
+                    VerticalLayout {
+                        // Arquivos que falharam: aparece quando a fila esvazia.
+                        if root.pending-visible: VerticalLayout {
+                            padding: 10px;
+                            padding-bottom: 4px;
+                            Rectangle {
+                                border-radius: 10px;
+                                background: Style.danger.with-alpha(0.1);
+                                border-width: 1px;
+                                border-color: Style.danger.with-alpha(0.35);
+                                HorizontalLayout {
+                                    padding: 12px;
+                                    spacing: 12px;
+                                    Image {
+                                        width: 20px;
+                                        height: 20px;
+                                        y: (parent.height - self.height) / 2;
+                                        source: Icons.warning;
+                                        colorize: Style.danger;
+                                    }
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        alignment: center;
+                                        spacing: 2px;
+                                        Text {
+                                            text: root.pending-title;
+                                            color: Style.text;
+                                            font-weight: 600;
+                                        }
+                                        Text {
+                                            text: root.pending-detail;
+                                            color: Style.muted;
+                                            font-size: 12px;
+                                            overflow: elide;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        ActionButton {
+                                            icon: Icons.retry;
+                                            text: @tr("Retry");
+                                            enabled: root.running;
+                                            clicked => { root.retry-failed(); }
+                                        }
+                                    }
+                                }
                             }
-                            Text {
-                                horizontal-stretch: 1;
-                                wrap: word-wrap;
-                                font-size: 13px;
-                                text: entry.message;
-                                color: entry.level == LogLevel.success ? Style.success
-                                    : entry.level == LogLevel.error ? Style.danger
-                                    : Style.text.with-alpha(0.8);
+                        }
+                        Rectangle {
+                            vertical-stretch: 1;
+                            if root.logs.length == 0: Text {
+                                text: @tr("Changes sent to the server show up here.");
+                                color: Style.muted;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            ListView {
+                                for entry in root.logs: HorizontalLayout {
+                                    padding-left: 14px;
+                                    padding-right: 14px;
+                                    padding-top: 3px;
+                                    padding-bottom: 3px;
+                                    spacing: 10px;
+                                    Text {
+                                        text: entry.time;
+                                        font-size: 12px;
+                                        color: Style.muted;
+                                        vertical-alignment: top;
+                                    }
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        wrap: word-wrap;
+                                        font-size: 13px;
+                                        text: entry.message;
+                                        color: entry.level == LogLevel.success ? Style.success
+                                            : entry.level == LogLevel.error ? Style.danger
+                                            : Style.text.with-alpha(0.8);
+                                    }
+                                }
                             }
                         }
                     }

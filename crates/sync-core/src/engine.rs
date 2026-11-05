@@ -70,6 +70,9 @@ pub enum EngineEvent {
     Running(bool),
     /// O observador de pastas falhou; a sincronização deve ser interrompida.
     WatchFailed(Message),
+    /// Emitido quando a fila esvazia: arquivos que ainda não foram enviados por
+    /// falha (caminhos relativos ao projeto). Vazio quando tudo foi enviado.
+    Pending(Vec<String>),
 }
 
 pub type Listener = Arc<dyn Fn(EngineEvent) + Send + Sync>;
@@ -161,6 +164,8 @@ impl TaskQueue {
 /// Comandos para a thread de envio.
 enum Command {
     Changes(usize, Vec<Change>),
+    /// Coloca de volta na fila os arquivos que falharam.
+    RetryFailed,
     Stop,
 }
 
@@ -259,7 +264,7 @@ impl SyncEngine {
             stopped: stopped.clone(),
             listener: self.listener.clone(),
             queue: TaskQueue::default(),
-            failed: 0,
+            failed: Vec::new(),
         };
         thread::Builder::new()
             .name("sync-worker".into())
@@ -273,6 +278,13 @@ impl SyncEngine {
         (self.listener)(EngineEvent::Running(true));
         self.log(LogLevel::Info, Message::Watching { count });
         Ok(())
+    }
+
+    /// Tenta de novo os arquivos que falharam. Retorna `false` se não está sincronizando.
+    pub fn retry_failed(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|session| session.sender.send(Command::RetryFailed).is_ok())
     }
 
     pub fn stop(&mut self) {
@@ -406,7 +418,9 @@ struct Worker {
     stopped: Arc<AtomicBool>,
     listener: Listener,
     queue: TaskQueue,
-    failed: usize,
+    /// Arquivos que falharam e ainda não foram enviados, na ordem em que falharam.
+    /// Saem da lista quando um envio posterior dá certo.
+    failed: Vec<(usize, PathBuf)>,
 }
 
 impl Worker {
@@ -439,21 +453,22 @@ impl Worker {
                     }
                     continue;
                 }
+                Some(Command::RetryFailed) => {
+                    self.retry_failed();
+                    continue;
+                }
                 None => {}
             }
 
             if let Some(task) = self.queue.pop() {
-                if !self.execute_with_retry(&task) {
-                    self.failed += 1;
+                let key = (task.project, task.path.clone());
+                if self.execute_with_retry(&task) {
+                    self.failed.retain(|failed| *failed != key);
+                } else if !self.failed.contains(&key) {
+                    self.failed.push(key);
                 }
                 if self.queue.is_empty() && !self.is_stopped() {
-                    match self.failed {
-                        0 => self.log(LogLevel::Info, Message::UpToDate),
-                        count => {
-                            self.log(LogLevel::Error, Message::QueueFinishedWithErrors { count })
-                        }
-                    }
-                    self.failed = 0;
+                    self.report_idle();
                 }
             }
         }
@@ -462,6 +477,45 @@ impl Worker {
 
     fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
+    }
+
+    /// Fila vazia: informa se está tudo enviado ou o que ficou pendente.
+    fn report_idle(&self) {
+        match self.failed.len() {
+            0 => self.log(LogLevel::Info, Message::UpToDate),
+            count => self.log(LogLevel::Error, Message::QueueFinishedWithErrors { count }),
+        }
+        let pending = self
+            .failed
+            .iter()
+            .map(|(project, path)| {
+                let root = &self.config.projects[*project].local;
+                display_relative(path.strip_prefix(root).unwrap_or(path))
+            })
+            .collect();
+        (self.listener)(EngineEvent::Pending(pending));
+    }
+
+    fn retry_failed(&mut self) {
+        if self.failed.is_empty() {
+            return;
+        }
+        self.log(
+            LogLevel::Info,
+            Message::RetryingFailed {
+                count: self.failed.len(),
+            },
+        );
+        // Ficam na lista até darem certo; pastas voltam a ter o conteúdo enviado.
+        for (project, path) in self.failed.clone() {
+            self.enqueue(
+                project,
+                Change {
+                    path,
+                    scan_dir: true,
+                },
+            );
+        }
     }
 
     fn log(&self, level: LogLevel, message: Message) {
@@ -657,6 +711,8 @@ mod tests {
     #[derive(Clone, Default)]
     struct FakeRemote {
         operations: Arc<Mutex<Vec<String>>>,
+        /// Simula o servidor fora do ar: todo envio falha.
+        offline: Arc<AtomicBool>,
     }
 
     impl Remote for FakeRemote {
@@ -666,6 +722,9 @@ mod tests {
         fn disconnect(&mut self) {}
         fn keepalive(&mut self) {}
         fn upload(&mut self, _: &Config, _: &Path, remote: &str) -> Result<()> {
+            if self.offline.load(Ordering::SeqCst) {
+                return Err(io::Error::other("offline").into());
+            }
             self.operations
                 .lock()
                 .unwrap()
@@ -788,5 +847,72 @@ mod tests {
             *operations.lock().unwrap(),
             vec!["upload /site/index.php".to_string()]
         );
+    }
+
+    /// Espera até a condição ser verdadeira (no máximo 20 s).
+    fn wait_until(description: &str, condition: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !condition() {
+            assert!(Instant::now() < deadline, "tempo esgotado: {description}");
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn arquivos_que_falharam_podem_ser_reenviados() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let remote = FakeRemote::default();
+        let operations = remote.operations.clone();
+        let offline = remote.offline.clone();
+        offline.store(true, Ordering::SeqCst);
+        let reports: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+        let listener = {
+            let reports = reports.clone();
+            Arc::new(move |event| {
+                if let EngineEvent::Pending(files) = event {
+                    reports.lock().unwrap().push(files);
+                }
+            })
+        };
+        let last_report = || {
+            let mut files = reports.lock().unwrap().last().cloned().unwrap_or_default();
+            files.sort();
+            files
+        };
+        let config = Config {
+            projects: vec![Project {
+                local: root.clone(),
+                remote: "/site".into(),
+                ..Project::default()
+            }],
+            ..Config::default()
+        };
+        let mut engine = SyncEngine::new(listener);
+        engine
+            .start_with(config, SyncOptions::default(), Box::new(remote))
+            .unwrap();
+        thread::sleep(Duration::from_millis(300));
+
+        // Servidor fora do ar: os dois arquivos ficam pendentes.
+        fs::write(root.join("a.php"), "a").unwrap();
+        fs::write(root.join("b.php"), "b").unwrap();
+        wait_until("relatório com os dois pendentes", || {
+            last_report() == ["a.php", "b.php"]
+        });
+        assert!(operations.lock().unwrap().is_empty());
+
+        // Servidor de volta: tentar de novo envia os dois e esvazia a lista.
+        offline.store(false, Ordering::SeqCst);
+        assert!(engine.retry_failed());
+        wait_until("relatório vazio depois de reenviar", || {
+            operations.lock().unwrap().len() == 2 && last_report().is_empty()
+        });
+        let mut uploaded = operations.lock().unwrap().clone();
+        uploaded.sort();
+        assert_eq!(uploaded, ["upload /site/a.php", "upload /site/b.php"]);
+
+        engine.stop();
+        assert!(!engine.retry_failed());
     }
 }
