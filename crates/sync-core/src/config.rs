@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::engine::SyncOptions;
 use crate::ignore_rules::DEFAULT_PATTERNS;
-use crate::{APP_ID, Error, Result};
+use crate::{APP_ID, Error, Message, Result};
 
 const KEYRING_SERVICE: &str = "com.edenilson.ftpfilesynchronizer";
 /// Conta usada até a v3.0, quando havia uma única credencial.
@@ -27,6 +27,7 @@ const LEGACY_ENCRYPTED_PREFIX: &str = "safe-storage:";
 const SETTINGS_VERSION: u32 = 2;
 
 pub const DEFAULT_PROFILE_ID: &str = "default";
+/// Nome do perfil criado automaticamente. A interface o traduz ao escolher o idioma.
 pub const DEFAULT_PROFILE_NAME: &str = "Padrão";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,9 +97,20 @@ pub enum Theme {
     Light,
 }
 
+/// Idioma da interface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    Pt,
+    En,
+    Es,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// `None` até o usuário escolher, na primeira vez que abre o app.
+    pub language: Option<Language>,
     pub theme: Theme,
     /// Barra lateral mostrando só os ícones.
     pub sidebar_collapsed: bool,
@@ -122,6 +134,7 @@ impl Settings {
     /// Configurações padrão com um único perfil.
     pub fn from_config(config: Config) -> Self {
         Self {
+            language: None,
             theme: Theme::default(),
             sidebar_collapsed: false,
             auto_start: false,
@@ -246,7 +259,7 @@ fn secret_account(profile_id: &str) -> String {
 pub struct LoadedSettings {
     pub settings: Settings,
     /// Mensagens para o usuário (importação, senha sem criptografia etc.).
-    pub notices: Vec<String>,
+    pub notices: Vec<Message>,
 }
 
 pub struct ConfigStore {
@@ -265,8 +278,7 @@ impl ConfigStore {
     }
 
     pub fn open_default() -> Result<Self> {
-        let base = dirs::config_dir()
-            .ok_or_else(|| Error::invalid("Pasta de configuração do usuário não encontrada."))?;
+        let base = dirs::config_dir().ok_or_else(|| Error::invalid(Message::ConfigDirNotFound))?;
         Ok(Self::new(
             base.join(APP_ID).join("config.json"),
             Some(base.join(LEGACY_DIR_NAME).join("config.json")),
@@ -290,9 +302,9 @@ impl ConfigStore {
         if let Some(legacy) = self.legacy_path.as_deref().filter(|path| path.exists())
             && let Some((config, password_imported)) = import_electron(legacy)
         {
-            let mut notices = vec!["Configuração importada da versão anterior.".to_string()];
+            let mut notices = vec![Message::ImportedFromPreviousVersion];
             if !password_imported {
-                notices.push("A senha da versão anterior é criptografada e não pôde ser importada; informe-a novamente.".to_string());
+                notices.push(Message::LegacyPasswordNotImported);
             }
             let settings = Settings::from_config(config);
             notices.extend(self.save(&settings)?);
@@ -333,11 +345,11 @@ impl ConfigStore {
         Ok(LoadedSettings { settings, notices })
     }
 
-    fn read_secret(&self, account: &str, notices: &mut Vec<String>) -> String {
+    fn read_secret(&self, account: &str, notices: &mut Vec<Message>) -> String {
         self.secrets
             .get(account)
             .unwrap_or_else(|error| {
-                let notice = format!("Não foi possível ler a senha do cofre do sistema: {error}");
+                let notice = Message::KeyringReadFailed { reason: error };
                 if !notices.contains(&notice) {
                     notices.push(notice);
                 }
@@ -347,7 +359,7 @@ impl ConfigStore {
     }
 
     /// Salva a configuração; retorna avisos para o usuário, se houver.
-    pub fn save(&self, settings: &Settings) -> Result<Vec<String>> {
+    pub fn save(&self, settings: &Settings) -> Result<Vec<Message>> {
         let mut notices = Vec::new();
         let mut plain_passwords = BTreeMap::new();
         let mut keyring_available = true;
@@ -371,10 +383,7 @@ impl ConfigStore {
             }
         }
         if !plain_passwords.is_empty() {
-            notices.push(
-                "Cofre de senhas do sistema indisponível; a senha foi salva sem criptografia."
-                    .to_string(),
-            );
+            notices.push(Message::KeyringUnavailable);
         }
 
         let stored = StoredSettings {

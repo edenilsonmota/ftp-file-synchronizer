@@ -1,6 +1,7 @@
 // Em release no Windows, não abre um console junto com a janela.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod i18n;
 mod single_instance;
 
 use std::cell::{Cell, RefCell};
@@ -10,11 +11,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 
+use i18n::Text;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
+use sync_core::config::{DEFAULT_PROFILE_ID, DEFAULT_PROFILE_NAME};
 use sync_core::engine::{EngineEvent, LogLevel as CoreLogLevel};
 use sync_core::ignore_rules::{IgnoreRules, parse_patterns};
 use sync_core::{
-    Config, ConfigStore, Profile, Project, Settings, SyncEngine, Theme, ftp, remote_path, validate,
+    Config, ConfigStore, Message, Profile, Project, Settings, SyncEngine, Theme, ftp, remote_path,
+    validate,
 };
 
 slint::include_modules!();
@@ -55,7 +59,7 @@ fn main() -> Result<(), slint::PlatformError> {
     register_profile_callbacks(&ui, &app);
     register_project_callbacks(&ui, &app);
     register_remote_picker(&ui, &app);
-    register_settings_callbacks(&ui);
+    register_settings_callbacks(&ui, &app);
     ui.on_dismiss_notice({
         let weak = ui.as_weak();
         move || weak.unwrap().set_notice(SharedString::new())
@@ -91,35 +95,39 @@ struct App {
 
 impl App {
     fn load(ui: &AppWindow, store: sync_core::Result<ConfigStore>) -> Rc<Self> {
+        let mut notices = Vec::new();
+        let mut failures = Vec::new();
         let (store, settings) = match store {
             Ok(store) => {
                 let settings = match store.load() {
                     Ok(loaded) => {
-                        for notice in loaded.notices {
-                            push_log(ui, CoreLogLevel::Info, notice);
-                        }
+                        notices = loaded.notices;
                         loaded.settings
                     }
                     Err(error) => {
-                        push_log(
-                            ui,
-                            CoreLogLevel::Error,
-                            format!("Falha ao carregar configurações: {error}"),
-                        );
+                        failures.push(Text::LoadSettingsFailed(error.message()));
                         Settings::default()
                     }
                 };
                 (Some(store), settings)
             }
             Err(error) => {
-                push_log(
-                    ui,
-                    CoreLogLevel::Error,
-                    format!("Falha ao abrir configurações: {error}"),
-                );
+                failures.push(Text::OpenSettingsFailed(error.message()));
                 (None, Settings::default())
             }
         };
+
+        // Sem idioma salvo é a primeira abertura: usa o do sistema e pergunta.
+        let language = settings.language.unwrap_or_else(i18n::detect);
+        i18n::apply(language);
+        ui.set_language_index(i18n::index(language));
+        ui.set_welcome_open(settings.language.is_none());
+        for notice in &notices {
+            log_message(ui, CoreLogLevel::Info, notice);
+        }
+        for failure in failures {
+            push_log(ui, CoreLogLevel::Error, i18n::text(failure));
+        }
 
         let app = Rc::new(Self {
             weak: ui.as_weak(),
@@ -185,6 +193,10 @@ impl App {
     fn capture(&self) {
         let ui = self.ui();
         let mut settings = self.settings.borrow_mut();
+        // Enquanto as boas-vindas estão abertas, o idioma ainda não foi escolhido.
+        if !ui.get_welcome_open() {
+            settings.language = Some(i18n::from_index(ui.get_language_index()));
+        }
         settings.theme = match ui.get_theme_index() {
             1 => Theme::Dark,
             2 => Theme::Light,
@@ -208,12 +220,12 @@ impl App {
         let ui = self.ui();
         match store.save(&self.settings.borrow()) {
             Ok(notices) => notices
-                .into_iter()
-                .for_each(|notice| push_log(&ui, CoreLogLevel::Info, notice)),
+                .iter()
+                .for_each(|notice| log_message(&ui, CoreLogLevel::Info, notice)),
             Err(error) => push_log(
                 &ui,
                 CoreLogLevel::Error,
-                format!("Falha ao salvar configurações: {error}"),
+                i18n::text(Text::SaveSettingsFailed(error.message())),
             ),
         }
     }
@@ -226,7 +238,7 @@ impl App {
             return true;
         }
         if let Err(error) = check_patterns(&parse_patterns(&ui.get_global_ignore())) {
-            ui.set_notice(error.to_string().into());
+            ui.set_notice(i18n::message(&error.message()).into());
             return false;
         }
         ui.set_settings_open(false);
@@ -256,7 +268,7 @@ impl App {
 
 fn profile_name(text: &str) -> String {
     match text.trim() {
-        "" => "Sem nome".to_string(),
+        "" => i18n::text(Text::Untitled),
         name => name.to_string(),
     }
 }
@@ -294,14 +306,15 @@ fn create_engine(ui: &AppWindow) -> SharedEngine {
     let engine = Arc::new(Mutex::new(SyncEngine::new(Arc::new(
         move |event| match event {
             EngineEvent::Log(level, message) => {
-                let _ = weak.upgrade_in_event_loop(move |ui| push_log(&ui, level, message));
+                let _ = weak.upgrade_in_event_loop(move |ui| log_message(&ui, level, &message));
             }
             EngineEvent::Running(running) => {
                 let _ = weak.upgrade_in_event_loop(move |ui| ui.set_running(running));
             }
             EngineEvent::WatchFailed(message) => {
-                let _ = weak
-                    .upgrade_in_event_loop(move |ui| push_log(&ui, CoreLogLevel::Error, message));
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    log_message(&ui, CoreLogLevel::Error, &message)
+                });
                 if let Some(engine) = engine_ref.get().cloned() {
                     thread::spawn(move || lock(&engine).stop());
                 }
@@ -310,6 +323,11 @@ fn create_engine(ui: &AppWindow) -> SharedEngine {
     ))));
     let _ = cell.set(engine.clone());
     engine
+}
+
+/// Mensagem do motor no log, no idioma atual.
+fn log_message(ui: &AppWindow, level: CoreLogLevel, message: &Message) {
+    push_log(ui, level, i18n::message(message));
 }
 
 fn push_log(ui: &AppWindow, level: CoreLogLevel, message: String) {
@@ -370,10 +388,10 @@ fn collect_config(ui: &AppWindow) -> Config {
 fn open_external(weak: &Weak<AppWindow>, target: &std::ffi::OsStr) {
     if let Err(error) = open::that_detached(target) {
         weak.unwrap().set_notice(
-            format!(
-                "Não foi possível abrir {}: {error}",
-                target.to_string_lossy()
-            )
+            i18n::text(Text::OpenFailed {
+                target: target.to_string_lossy().into_owned(),
+                reason: error.to_string(),
+            })
             .into(),
         );
     }
@@ -390,13 +408,13 @@ fn register_connection_callbacks(ui: &AppWindow) {
         let ui = weak.unwrap();
         let config = match validate::connection(&collect_connection(&ui)) {
             Ok(config) => config,
-            Err(error) => return ui.set_notice(error.to_string().into()),
+            Err(error) => return ui.set_notice(i18n::message(&error.message()).into()),
         };
         ui.set_testing(true);
         push_log(
             &ui,
             CoreLogLevel::Info,
-            "Testando credenciais FTP...".into(),
+            i18n::text(Text::TestingCredentials),
         );
         let weak = weak.clone();
         thread::spawn(move || {
@@ -408,17 +426,17 @@ fn register_connection_callbacks(ui: &AppWindow) {
                         push_log(
                             &ui,
                             CoreLogLevel::Success,
-                            "Credenciais FTP válidas.".into(),
+                            i18n::text(Text::CredentialsValid),
                         );
-                        ui.set_notice("Conexão FTP estabelecida com sucesso!".into());
+                        ui.set_notice(i18n::text(Text::ConnectionSucceeded).into());
                     }
                     Err(error) => {
                         push_log(
                             &ui,
                             CoreLogLevel::Error,
-                            format!("Falha no teste FTP: {error}"),
+                            i18n::text(Text::TestFailed(error.message())),
                         );
-                        ui.set_notice(format!("Falha ao conectar: {error}").into());
+                        ui.set_notice(i18n::text(Text::ConnectFailed(error.message())).into());
                     }
                 }
             });
@@ -443,8 +461,9 @@ fn register_sync_callbacks(ui: &AppWindow, app: &Rc<App>, engine: &SharedEngine)
             let config = match config {
                 Ok(config) => config,
                 Err(error) => {
-                    push_log(&ui, CoreLogLevel::Error, error.to_string());
-                    return ui.set_notice(error.to_string().into());
+                    let message = i18n::message(&error.message());
+                    push_log(&ui, CoreLogLevel::Error, message.clone());
+                    return ui.set_notice(message.into());
                 }
             };
             ui.set_busy(true);
@@ -455,9 +474,7 @@ fn register_sync_callbacks(ui: &AppWindow, app: &Rc<App>, engine: &SharedEngine)
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_busy(false);
                     if let Err(error) = result {
-                        ui.set_notice(
-                            format!("Não foi possível iniciar a sincronização: {error}").into(),
-                        );
+                        ui.set_notice(i18n::text(Text::StartFailed(error.message())).into());
                     }
                 });
             });
@@ -513,26 +530,25 @@ fn register_profile_callbacks(ui: &AppWindow, app: &Rc<App>) {
     });
     ui.on_add_profile({
         let app = app.clone();
-        move || app.add_profile("Novo perfil".to_string(), Config::default())
+        move || app.add_profile(i18n::text(Text::NewProfile), Config::default())
     });
     ui.on_duplicate_profile({
         let app = app.clone();
         move || {
             app.capture();
             let active = app.settings.borrow().active().clone();
-            app.add_profile(format!("{} (cópia)", active.name), active.config);
+            app.add_profile(
+                i18n::text(Text::CopyOf { name: active.name }),
+                active.config,
+            );
         }
     });
     ui.on_delete_profile({
         let app = app.clone();
         move || {
             let name = profile_name(&app.ui().get_profile_name());
-            app.ui().set_confirm_text(
-                format!(
-                    "Excluir o perfil \"{name}\"? A credencial e a lista de projetos dele serão apagadas."
-                )
-                .into(),
-            );
+            app.ui()
+                .set_confirm_text(i18n::text(Text::ConfirmDeleteProfile { name }).into());
         }
     });
     ui.on_confirm_accepted({
@@ -599,7 +615,7 @@ fn register_project_callbacks(ui: &AppWindow, app: &Rc<App>) {
             let projects = projects.clone();
             let _ = slint::spawn_local(async move {
                 let picked = rfd::AsyncFileDialog::new()
-                    .set_title("Selecionar pasta local")
+                    .set_title(i18n::text(Text::ChooseLocalFolder))
                     .pick_folder()
                     .await;
                 if let Some(folder) = picked {
@@ -624,7 +640,7 @@ fn register_project_callbacks(ui: &AppWindow, app: &Rc<App>) {
             let title = Path::new(row.local.as_str())
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "projeto".to_string());
+                .unwrap_or_else(|| i18n::text(Text::ProjectFallback));
             target.set(index as usize);
             ui.set_ignore_title(title.into());
             ui.set_ignore_text(row.ignore);
@@ -638,7 +654,7 @@ fn register_project_callbacks(ui: &AppWindow, app: &Rc<App>) {
             let ui = weak.unwrap();
             let patterns = parse_patterns(&ui.get_ignore_text());
             if let Err(error) = check_patterns(&patterns) {
-                return ui.set_notice(error.to_string().into());
+                return ui.set_notice(i18n::message(&error.message()).into());
             }
             update_row(&projects, target.get(), |row| {
                 row.ignore = patterns.join("\n").into();
@@ -649,7 +665,27 @@ fn register_project_callbacks(ui: &AppWindow, app: &Rc<App>) {
     });
 }
 
-fn register_settings_callbacks(ui: &AppWindow) {
+fn register_settings_callbacks(ui: &AppWindow, app: &Rc<App>) {
+    ui.on_language_selected(|index| i18n::apply(i18n::from_index(index)));
+    ui.on_welcome_confirmed({
+        let app = app.clone();
+        move || {
+            app.ui().set_welcome_open(false);
+            app.capture();
+            // O perfil criado automaticamente ganha o nome no idioma escolhido.
+            {
+                let mut settings = app.settings.borrow_mut();
+                let name = i18n::text(Text::DefaultProfile);
+                for profile in &mut settings.profiles {
+                    if profile.id == DEFAULT_PROFILE_ID && profile.name == DEFAULT_PROFILE_NAME {
+                        profile.name = name.clone();
+                    }
+                }
+            }
+            app.show_profiles();
+            app.persist();
+        }
+    });
     ui.on_open_config_folder({
         let weak = ui.as_weak();
         move || {
@@ -713,9 +749,7 @@ impl RemotePicker {
                     }
                     Err(error) => {
                         ui.set_picker_open(false);
-                        ui.set_notice(
-                            format!("Falha ao listar diretórios remotos: {error}").into(),
-                        );
+                        ui.set_notice(i18n::text(Text::ListFailed(error.message())).into());
                     }
                 }
             });
@@ -744,8 +778,7 @@ fn register_remote_picker(ui: &AppWindow, app: &Rc<App>) {
         move |index| {
             let ui = picker.weak.unwrap();
             let Ok(config) = validate::connection(&collect_connection(&ui)) else {
-                return ui
-                    .set_notice("Preencha host e usuário antes de navegar no FTP remoto.".into());
+                return ui.set_notice(i18n::text(Text::FillHostBeforeBrowsing).into());
             };
             let current = projects
                 .row_data(index as usize)
@@ -791,6 +824,7 @@ mod tests {
     use super::*;
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
     use std::collections::HashMap;
+    use sync_core::Language;
     use sync_core::config::SecretStore;
 
     /// Cofre em memória, compartilhado entre os stores de um mesmo teste.
@@ -820,14 +854,23 @@ mod tests {
     }
 
     impl Fixture {
-        /// Abre a janela (sem exibir) com um projeto existente no perfil padrão.
+        /// Abre a janela (sem exibir) em inglês, o idioma original dos textos,
+        /// com um projeto existente no perfil padrão.
         fn new() -> Self {
+            Self::with_language(Some(Language::En))
+        }
+
+        /// `None` simula a primeira abertura do app.
+        fn with_language(language: Option<Language>) -> Self {
             i_slint_backend_testing::init_no_event_loop();
             let dir = tempfile::tempdir().unwrap();
             let secrets = MemorySecrets::default();
             let project_dir = dir.path().join("site");
             std::fs::create_dir_all(&project_dir).unwrap();
-            let mut settings = Settings::default();
+            let mut settings = Settings {
+                language,
+                ..Settings::default()
+            };
             settings.active_mut().config = Config {
                 host: "ftp.producao".into(),
                 user: "deploy".into(),
@@ -849,7 +892,7 @@ mod tests {
             let app = App::load(&ui, Ok(store));
             register_profile_callbacks(&ui, &app);
             register_project_callbacks(&ui, &app);
-            register_settings_callbacks(&ui);
+            register_settings_callbacks(&ui, &app);
             Self {
                 ui,
                 app,
@@ -891,7 +934,7 @@ mod tests {
         let ui = &fixture.ui;
         assert_eq!(ui.get_host(), "ftp.producao");
 
-        fixture.click("Novo perfil");
+        fixture.click("New profile");
         assert_eq!(fixture.app.profiles.row_count(), 2);
         assert_eq!(ui.get_profile_index(), 1);
         assert_eq!(ui.get_host(), "", "perfil novo começa vazio");
@@ -926,18 +969,18 @@ mod tests {
     fn duplicar_e_excluir_perfil() {
         let fixture = Fixture::new();
         let ui = &fixture.ui;
-        fixture.click("Duplicar perfil");
-        assert_eq!(ui.get_profile_name(), "Padrão (cópia)");
+        fixture.click("Duplicate profile");
+        assert_eq!(ui.get_profile_name(), "Padrão (copy)");
         assert_eq!(ui.get_host(), "ftp.producao");
         assert_eq!(fixture.app.projects.row_count(), 1);
 
         // Exclusão pede confirmação; cancelar não apaga nada.
-        fixture.click("Excluir perfil");
-        assert!(ui.get_confirm_text().contains("Padrão (cópia)"));
+        fixture.click("Delete profile");
+        assert!(ui.get_confirm_text().contains("Padrão (copy)"));
         ui.invoke_confirm_cancelled();
         assert_eq!(fixture.saved().profiles.len(), 2);
 
-        fixture.click("Excluir perfil");
+        fixture.click("Delete profile");
         ui.invoke_confirm_accepted();
         assert_eq!(ui.get_confirm_text(), "");
         assert_eq!(ui.get_profile_name(), "Padrão");
@@ -974,7 +1017,7 @@ mod tests {
         ui.set_ignore_text("{a,b".into());
         ui.invoke_save_ignore();
         assert!(ui.get_ignore_open());
-        assert!(ui.get_notice().contains("inválido"));
+        assert!(ui.get_notice().contains("Invalid"));
         assert_eq!(fixture.app.projects.row_data(0).unwrap().ignore_count, 0);
     }
 
@@ -982,18 +1025,18 @@ mod tests {
     fn configuracoes_gerais_sao_salvas_ao_voltar_ao_perfil() {
         let fixture = Fixture::new();
         let ui = &fixture.ui;
-        fixture.click("Configurações");
+        fixture.click("Settings");
         assert!(ui.get_settings_open());
-        fixture.click("Claro");
+        fixture.click("Light");
         assert_eq!(ui.get_theme_index(), 2);
-        fixture.click("Iniciar sincronização ao abrir o app");
-        fixture.click("Espelhar exclusões no servidor");
+        fixture.click("Start syncing when the app opens");
+        fixture.click("Mirror deletions on the server");
 
         // Padrão inválido: continua nas configurações.
         ui.set_global_ignore("{a,b".into());
         fixture.click("Padrão");
         assert!(ui.get_settings_open());
-        assert!(ui.get_notice().contains("inválido"));
+        assert!(ui.get_notice().contains("Invalid"));
         ui.set_notice(SharedString::new());
 
         ui.set_global_ignore("node_modules/\n*.tmp".into());
@@ -1011,16 +1054,16 @@ mod tests {
     fn barra_lateral_recolhe_e_lembra_o_estado() {
         let fixture = Fixture::new();
         let ui = &fixture.ui;
-        fixture.click("Recolher menu");
+        fixture.click("Collapse menu");
         assert!(ui.get_sidebar_collapsed());
         // Recolhida, os perfis e as ações continuam acessíveis.
-        fixture.click("Configurações");
+        fixture.click("Settings");
         assert!(ui.get_settings_open());
         fixture.click("Padrão");
         assert!(!ui.get_settings_open());
         assert!(fixture.saved().sidebar_collapsed);
 
-        fixture.click("Expandir menu");
+        fixture.click("Expand menu");
         assert!(!ui.get_sidebar_collapsed());
         fixture.app.persist();
         assert!(!fixture.saved().sidebar_collapsed);
@@ -1030,20 +1073,20 @@ mod tests {
     fn acoes_principais_tem_botoes_acessiveis() {
         let fixture = Fixture::new();
         for label in [
-            "Iniciar sincronização",
-            "Novo perfil",
-            "Duplicar perfil",
-            "Nome do perfil",
+            "Start syncing",
+            "New profile",
+            "Duplicate profile",
+            "Profile name",
             "FTPS",
-            "Monitorar este projeto",
-            "Configurações",
-            "Testar conexão",
-            "Adicionar projeto",
-            "Selecionar pasta local",
-            "Escolher pasta no FTP",
-            "Arquivos ignorados",
-            "Remover projeto",
-            "Limpar logs",
+            "Sync this project",
+            "Settings",
+            "Test connection",
+            "Add project",
+            "Choose local folder",
+            "Browse FTP folder",
+            "Ignored files",
+            "Remove project",
+            "Clear logs",
         ] {
             assert!(
                 ElementHandle::find_by_accessible_label(&fixture.ui, label)
@@ -1052,9 +1095,100 @@ mod tests {
                 "botão {label:?} não encontrado"
             );
         }
-        fixture.click("Adicionar projeto");
+        fixture.click("Add project");
         assert_eq!(fixture.app.projects.row_count(), 2);
-        fixture.click("Remover projeto");
+        fixture.click("Remove project");
         assert_eq!(fixture.app.projects.row_count(), 1);
+    }
+
+    #[test]
+    fn primeira_abertura_pergunta_o_idioma() {
+        let fixture = Fixture::with_language(None);
+        let ui = &fixture.ui;
+        assert!(ui.get_welcome_open());
+        assert_eq!(ui.get_language_index(), i18n::index(i18n::detect()));
+
+        // Escolher um idioma traduz a interface na hora.
+        fixture.click("Español");
+        assert_eq!(i18n::current(), Language::Es);
+        assert!(
+            ElementHandle::find_by_accessible_label(ui, "Configuración")
+                .next()
+                .is_some()
+        );
+        fixture.click("Continuar");
+        assert!(!ui.get_welcome_open());
+
+        // O perfil criado automaticamente ganha o nome no idioma escolhido.
+        let saved = fixture.saved();
+        assert_eq!(saved.language, Some(Language::Es));
+        assert_eq!(saved.active().name, "Predeterminado");
+        assert_eq!(ui.get_profile_name(), "Predeterminado");
+    }
+
+    #[test]
+    fn trocar_idioma_nas_configuracoes() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        assert!(!ui.get_welcome_open());
+        fixture.click("Settings");
+        fixture.click("Português");
+        assert!(
+            ElementHandle::find_by_accessible_label(ui, "Configurações")
+                .next()
+                .is_some()
+        );
+        assert_eq!(i18n::text(Text::NewProfile), "Novo perfil");
+        fixture.click("Padrão");
+        // Perfil existente com nome dado pelo usuário não é renomeado.
+        let saved = fixture.saved();
+        assert_eq!(saved.language, Some(Language::Pt));
+        assert_eq!(saved.active().name, "Padrão");
+    }
+
+    /// Lê os textos de um `.po` (msgid → msgstr).
+    fn po_entries(po: &str) -> std::collections::HashMap<String, String> {
+        let unquote = |line: &str, prefix: &str| {
+            line.strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix('"'))
+                .map(|text| text.replace("\\\"", "\"").replace("\\\\", "\\"))
+        };
+        let mut entries = std::collections::HashMap::new();
+        let mut msgid = None;
+        for line in po.lines() {
+            if let Some(id) = unquote(line, "msgid \"") {
+                msgid = Some(id);
+            } else if let (Some(id), Some(text)) = (msgid.take(), unquote(line, "msgstr \"")) {
+                entries.insert(id, text);
+            }
+        }
+        entries
+    }
+
+    #[test]
+    fn todo_texto_da_interface_tem_traducao() {
+        let ui = include_str!("../ui/app.slint");
+        let ids: Vec<&str> = ui
+            .split("@tr(\"")
+            .skip(1)
+            .map(|rest| &rest[..rest.find('"').unwrap()])
+            .collect();
+        assert!(ids.len() > 50, "textos encontrados: {}", ids.len());
+        for (language, po) in [
+            (
+                "pt",
+                include_str!("../translations/pt/LC_MESSAGES/ftp-file-synchronizer.po"),
+            ),
+            (
+                "es",
+                include_str!("../translations/es/LC_MESSAGES/ftp-file-synchronizer.po"),
+            ),
+        ] {
+            let entries = po_entries(po);
+            for id in &ids {
+                let translated = entries.get(*id).map(String::as_str).unwrap_or_default();
+                assert!(!translated.is_empty(), "sem tradução em {language}: {id:?}");
+            }
+        }
     }
 }

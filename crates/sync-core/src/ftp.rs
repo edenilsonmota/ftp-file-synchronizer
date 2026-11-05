@@ -14,7 +14,7 @@ use rustls_platform_verifier::ConfigVerifierExt;
 use suppaftp::types::FileType;
 use suppaftp::{RustlsConnector, RustlsFtpStream};
 
-use crate::{Config, Error, Result, remote_path};
+use crate::{Config, Error, Message, Result, remote_path};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -43,10 +43,9 @@ pub fn connect(config: &Config) -> Result<RustlsFtpStream> {
         (Some(stream), _) => stream,
         (None, Some(error)) => return Err(error.into()),
         (None, None) => {
-            return Err(Error::invalid(format!(
-                "Host não encontrado: {}",
-                config.host
-            )));
+            return Err(Error::invalid(Message::HostNotFound {
+                host: config.host.clone(),
+            }));
         }
     };
     stream.get_ref().set_read_timeout(Some(TIMEOUT))?;
@@ -78,7 +77,7 @@ fn open_data_connection(address: SocketAddr) -> suppaftp::FtpResult<TcpStream> {
         .map_err(|error| {
             suppaftp::FtpError::ConnectionError(io::Error::new(
                 error.kind(),
-                format!("conexão de dados com {address} falhou: {error}"),
+                format!("data connection to {address} failed: {error}"),
             ))
         })?;
     Ok(stream)

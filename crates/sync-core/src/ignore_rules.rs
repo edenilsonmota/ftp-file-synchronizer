@@ -8,7 +8,7 @@ use std::path::Path;
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
-use crate::{Error, Result};
+use crate::{Error, Message, Result};
 
 /// Padrões globais usados quando o usuário ainda não definiu os seus.
 pub const DEFAULT_PATTERNS: [&str; 4] = ["node_modules/", ".git/", ".vscode/", "desktop.ini"];
@@ -21,8 +21,11 @@ impl IgnoreRules {
     pub fn new(root: &Path, global: &[String], project: &[String]) -> Result<Self> {
         let mut builder = GitignoreBuilder::new(root);
         // Segue o sistema de arquivos: Windows e macOS não diferenciam maiúsculas.
-        let invalid =
-            |error: ignore::Error| Error::invalid(format!("Padrão ignorado inválido: {error}"));
+        let invalid = |error: ignore::Error| {
+            Error::invalid(Message::InvalidIgnorePattern {
+                reason: error.to_string(),
+            })
+        };
         builder
             .case_insensitive(cfg!(any(windows, target_os = "macos")))
             .map_err(invalid)?;

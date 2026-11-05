@@ -409,7 +409,7 @@ component StatusPill inherits Rectangle {
             vertical-alignment: center;
             font-size: 12px;
             font-weight: 600;
-            text: root.busy ? "Aguarde..." : root.running ? "Sincronizando" : "Parado";
+            text: root.busy ? @tr("Please wait...") : root.running ? @tr("Syncing") : @tr("Stopped");
             color: root.tone;
         }
     }
@@ -544,7 +544,7 @@ component ProfileItem inherits SidebarItem {
                 overflow: elide;
             }
             Text {
-                text: root.entry.detail == "" ? "Sem servidor" : root.entry.detail;
+                text: root.entry.detail == "" ? @tr("No server") : root.entry.detail;
                 color: Style.muted;
                 font-size: 11px;
                 overflow: elide;
@@ -568,6 +568,66 @@ component Dialog inherits Rectangle {
     drop-shadow-blur: 30px;
     drop-shadow-offset-y: 10px;
     drop-shadow-color: #00000059;
+}
+
+/// Nomes dos idiomas, sempre no próprio idioma (não são traduzidos).
+global Languages {
+    out property <[string]> names: ["Português", "English", "Español"];
+}
+
+/// Opção grande e selecionável, usada na escolha de idioma.
+component ChoiceOption inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 46px;
+    border-radius: 10px;
+    border-width: focus.has-focus ? 2px : 1px;
+    border-color: root.selected || focus.has-focus ? Style.accent-1 : Style.border;
+    background: root.selected ? Style.selected : area.has-hover ? Style.hover : Style.control;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 14px;
+        Text {
+            horizontal-stretch: 1;
+            text: root.text;
+            color: Style.text;
+            font-weight: root.selected ? 600 : 400;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            width: 20px;
+            height: 20px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 10px;
+            border-width: root.selected ? 0 : 2px;
+            border-color: Style.toggle-off;
+            background: root.selected ? Style.accent-gradient : transparent;
+            if root.selected: Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: #ffffff;
+            }
+        }
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
 }
 
 component DialogTitle inherits Text {
@@ -610,6 +670,8 @@ component PageTitle inherits Text {
 
 component SettingsPage inherits VerticalLayout {
     in-out property <int> theme-index;
+    in-out property <int> language-index;
+    callback language-selected(int);
     in-out property <bool> auto-start;
     in-out property <bool> mirror-deletions;
     in-out property <string> global-ignore;
@@ -621,7 +683,7 @@ component SettingsPage inherits VerticalLayout {
     padding-right: 16px;
     spacing: 18px;
 
-    PageTitle { text: "Configurações"; }
+    PageTitle { text: @tr("Settings"); }
 
     ScrollView {
         vertical-stretch: 1;
@@ -630,46 +692,66 @@ component SettingsPage inherits VerticalLayout {
             padding-right: 12px;
             alignment: start;
 
-            SectionLabel { text: "APARÊNCIA"; }
+            SectionLabel { text: @tr("APPEARANCE"); }
             Card {
-                HorizontalLayout {
+                VerticalLayout {
                     padding: 16px;
-                    spacing: 12px;
-                    Text {
-                        horizontal-stretch: 1;
-                        text: "Tema";
-                        color: Style.text;
-                        vertical-alignment: center;
+                    spacing: 14px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: @tr("Theme");
+                            color: Style.text;
+                            vertical-alignment: center;
+                        }
+                        Segmented {
+                            options: [@tr("System"), @tr("Dark"), @tr("Light")];
+                            selected: root.theme-index;
+                            picked(index) => { root.theme-index = index; }
+                        }
                     }
-                    Segmented {
-                        options: ["Sistema", "Escuro", "Claro"];
-                        selected: root.theme-index;
-                        picked(index) => { root.theme-index = index; }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: @tr("Language");
+                            color: Style.text;
+                            vertical-alignment: center;
+                        }
+                        Segmented {
+                            options: Languages.names;
+                            selected: root.language-index;
+                            picked(index) => {
+                                root.language-index = index;
+                                root.language-selected(index);
+                            }
+                        }
                     }
                 }
             }
 
-            SectionLabel { text: "SINCRONIZAÇÃO"; }
+            SectionLabel { text: @tr("SYNC"); }
             Card {
                 VerticalLayout {
                     padding: 16px;
                     spacing: 16px;
                     SettingToggle {
-                        title: "Iniciar sincronização ao abrir o app";
-                        description: "Usa o perfil selecionado por último.";
+                        title: @tr("Start syncing when the app opens");
+                        description: @tr("Uses the last selected profile.");
                         checked: root.auto-start;
                         toggled(value) => { root.auto-start = value; }
                     }
                     SettingToggle {
-                        title: "Espelhar exclusões no servidor";
-                        description: "Quando desativado, arquivos e pastas apagados localmente continuam no servidor.";
+                        title: @tr("Mirror deletions on the server");
+                        description: @tr("When off, files and folders deleted locally stay on the server.");
                         checked: root.mirror-deletions;
                         toggled(value) => { root.mirror-deletions = value; }
                     }
                 }
             }
 
-            SectionLabel { text: "ARQUIVOS IGNORADOS EM TODOS OS PROJETOS"; }
+            SectionLabel { text: @tr("FILES IGNORED IN ALL PROJECTS"); }
             Card {
                 VerticalLayout {
                     padding: 16px;
@@ -681,12 +763,12 @@ component SettingsPage inherits VerticalLayout {
                         placeholder-text: "node_modules/";
                     }
                     Hint {
-                        text: "Um padrão por linha, na mesma sintaxe do .gitignore (ex.: *.log, vendor/, /config.php, !manter.log). Cada projeto pode ter padrões próprios. As mudanças valem na próxima vez que a sincronização iniciar.";
+                        text: @tr("One pattern per line, using .gitignore syntax (e.g. *.log, vendor/, /config.php, !keep.log). Each project can have its own patterns. Changes apply the next time syncing starts.");
                     }
                 }
             }
 
-            SectionLabel { text: "SOBRE"; }
+            SectionLabel { text: @tr("ABOUT"); }
             Card {
                 HorizontalLayout {
                     padding: 18px;
@@ -731,7 +813,7 @@ component SettingsPage inherits VerticalLayout {
                             }
                         }
                         Hint {
-                            text: "Envia automaticamente para o servidor FTP/FTPS cada arquivo alterado nas suas pastas.";
+                            text: @tr("Automatically uploads every changed file in your folders to your FTP/FTPS server.");
                         }
                         HorizontalLayout {
                             padding-top: 10px;
@@ -739,12 +821,12 @@ component SettingsPage inherits VerticalLayout {
                             alignment: start;
                             ActionButton {
                                 icon: Icons.folder-open;
-                                text: "Abrir pasta de configuração";
+                                text: @tr("Open settings folder");
                                 clicked => { root.open-config-folder(); }
                             }
                             ActionButton {
                                 icon: Icons.external-link;
-                                text: "Ver no GitHub";
+                                text: @tr("View on GitHub");
                                 clicked => { root.open-repository(); }
                             }
                         }
@@ -803,6 +885,9 @@ export component AppWindow inherits Window {
     // Configurações gerais
     in-out property <bool> settings-open;
     in-out property <int> theme-index;
+    in-out property <int> language-index: 1;
+    // Primeira abertura: pergunta o idioma.
+    in-out property <bool> welcome-open;
     in-out property <bool> auto-start;
     in-out property <bool> mirror-deletions: true;
     in-out property <string> global-ignore;
@@ -846,6 +931,8 @@ export component AppWindow inherits Window {
     callback clear-logs();
     callback open-config-folder();
     callback open-repository();
+    callback language-selected(int);
+    callback welcome-confirmed();
     callback dismiss-notice();
     callback confirm-accepted();
     callback confirm-cancelled();
@@ -912,7 +999,7 @@ export component AppWindow inherits Window {
                     }
                 }
                 if !root.sidebar-collapsed: SectionLabel {
-                    text: "PERFIS";
+                    text: @tr("PROFILES");
                     height: 26px;
                     x: 8px;
                 }
@@ -934,7 +1021,7 @@ export component AppWindow inherits Window {
                         padding-bottom: 4px;
                         ProfileItem {
                             entry: index == root.profile-index ? {
-                                name: root.profile-name == "" ? "Sem nome" : root.profile-name,
+                                name: root.profile-name == "" ? @tr("Untitled") : root.profile-name,
                                 initial: entry.initial,
                                 detail: root.host,
                             } : entry;
@@ -950,7 +1037,7 @@ export component AppWindow inherits Window {
                         }
                         NavItem {
                             icon: Icons.plus;
-                            label: "Novo perfil";
+                            label: @tr("New profile");
                             collapsed: root.sidebar-collapsed;
                             enabled: !root.locked;
                             clicked => { root.add-profile(); }
@@ -966,7 +1053,7 @@ export component AppWindow inherits Window {
                 }
                 NavItem {
                     icon: Icons.settings;
-                    label: "Configurações";
+                    label: @tr("Settings");
                     collapsed: root.sidebar-collapsed;
                     selected: root.settings-open;
                     clicked => { root.settings-open = true; }
@@ -981,7 +1068,7 @@ export component AppWindow inherits Window {
                 size: 26px;
                 radius: 13px;
                 icon: root.sidebar-collapsed ? Icons.chevron-right : Icons.chevron-left;
-                tooltip: root.sidebar-collapsed ? "Expandir menu" : "Recolher menu";
+                tooltip: root.sidebar-collapsed ? @tr("Expand menu") : @tr("Collapse menu");
                 clicked => {
                     root.sidebar-collapsed = !root.sidebar-collapsed;
                     root.sidebar-tip = "";
@@ -1001,6 +1088,8 @@ export component AppWindow inherits Window {
 
             if root.settings-open: SettingsPage {
                 theme-index <=> root.theme-index;
+                language-index <=> root.language-index;
+                language-selected(index) => { root.language-selected(index); }
                 auto-start <=> root.auto-start;
                 mirror-deletions <=> root.mirror-deletions;
                 global-ignore <=> root.global-ignore;
@@ -1055,7 +1144,7 @@ export component AppWindow inherits Window {
                                     vertical-alignment: center;
                                     single-line: true;
                                     enabled: !root.locked;
-                                    accessible-label: "Nome do perfil";
+                                    accessible-label: @tr("Profile name");
                                     edited => { root.profile-renamed(self.text); }
                                 }
                                 Image {
@@ -1072,7 +1161,7 @@ export component AppWindow inherits Window {
                                 alignment: center;
                                 IconButton {
                                     icon: Icons.copy;
-                                    tooltip: "Duplicar perfil";
+                                    tooltip: @tr("Duplicate profile");
                                     enabled: !root.locked;
                                     clicked => { root.duplicate-profile(); }
                                 }
@@ -1081,7 +1170,7 @@ export component AppWindow inherits Window {
                                 alignment: center;
                                 IconButton {
                                     icon: Icons.trash;
-                                    tooltip: "Excluir perfil";
+                                    tooltip: @tr("Delete profile");
                                     danger: true;
                                     enabled: !root.locked && root.profiles.length > 1;
                                     clicked => { root.delete-profile(); }
@@ -1091,7 +1180,7 @@ export component AppWindow inherits Window {
                         }
                         Text {
                             x: 8px;
-                            text: root.host == "" ? "Configure o servidor abaixo"
+                            text: root.host == "" ? @tr("Set up the server below")
                                 : (root.user == "" ? "" : root.user + "@") + root.host + ":" + root.port + (root.secure ? " · FTPS" : "");
                             color: Style.muted;
                             font-size: 13px;
@@ -1113,7 +1202,7 @@ export component AppWindow inherits Window {
                             primary: true;
                             fill: root.running ? Style.danger-gradient : Style.accent-gradient;
                             icon: root.running ? Icons.stop : Icons.play;
-                            tooltip: root.running ? "Parar sincronização" : "Iniciar sincronização";
+                            tooltip: root.running ? @tr("Stop syncing") : @tr("Start syncing");
                             enabled: !root.busy;
                             clicked => {
                                 if (root.running) {
@@ -1127,7 +1216,7 @@ export component AppWindow inherits Window {
                 }
 
                 SectionLabel {
-                    text: "SERVIDOR";
+                    text: @tr("SERVER");
                     height: 22px;
                 }
                 Card {
@@ -1137,16 +1226,16 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             spacing: 12px;
                             Field {
-                                label: "Host";
+                                label: @tr("Host");
                                 horizontal-stretch: 1;
                                 LineEdit {
                                     text <=> root.host;
-                                    placeholder-text: "ftp.exemplo.com";
+                                    placeholder-text: @tr("ftp.example.com");
                                     enabled: !root.locked;
                                 }
                             }
                             Field {
-                                label: "Porta";
+                                label: @tr("Port");
                                 width: 76px;
                                 LineEdit {
                                     width: 76px;
@@ -1175,7 +1264,7 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             spacing: 12px;
                             Field {
-                                label: "Usuário";
+                                label: @tr("User");
                                 horizontal-stretch: 1;
                                 LineEdit {
                                     text <=> root.user;
@@ -1183,7 +1272,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                             Field {
-                                label: "Senha";
+                                label: @tr("Password");
                                 horizontal-stretch: 1;
                                 LineEdit {
                                     text <=> root.password;
@@ -1195,7 +1284,7 @@ export component AppWindow inherits Window {
                                 alignment: end;
                                 IconButton {
                                     icon: Icons.plug;
-                                    tooltip: root.testing ? "Testando..." : "Testar conexão";
+                                    tooltip: root.testing ? @tr("Testing...") : @tr("Test connection");
                                     enabled: !root.locked && !root.testing;
                                     clicked => { root.test-connection(); }
                                 }
@@ -1207,11 +1296,11 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     padding-top: 8px;
                     spacing: 10px;
-                    SectionLabel { text: "PROJETOS"; }
+                    SectionLabel { text: @tr("PROJECTS"); }
                     Rectangle { horizontal-stretch: 1; }
                     IconButton {
                         icon: Icons.plus;
-                        tooltip: "Adicionar projeto";
+                        tooltip: @tr("Add project");
                         enabled: !root.locked;
                         clicked => { root.add-project(); }
                     }
@@ -1233,7 +1322,7 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     alignment: center;
                                     Toggle {
-                                        label: "Monitorar este projeto";
+                                        label: @tr("Sync this project");
                                         checked: project.enabled;
                                         enabled: !root.locked;
                                         toggled(value) => { root.project-toggled(index, value); }
@@ -1242,41 +1331,41 @@ export component AppWindow inherits Window {
                                 LineEdit {
                                     horizontal-stretch: 1;
                                     text: project.local;
-                                    placeholder-text: "Pasta local";
+                                    placeholder-text: @tr("Local folder");
                                     read-only: true;
                                     enabled: !root.locked;
                                     opacity: project.enabled ? 1 : 0.5;
                                 }
                                 IconButton {
                                     icon: Icons.folder-open;
-                                    tooltip: "Selecionar pasta local";
+                                    tooltip: @tr("Choose local folder");
                                     enabled: !root.locked;
                                     clicked => { root.select-local(index); }
                                 }
                                 LineEdit {
                                     horizontal-stretch: 1;
                                     text: project.remote;
-                                    placeholder-text: "Pasta remota (/web/...)";
+                                    placeholder-text: @tr("Remote folder (/web/...)");
                                     enabled: !root.locked;
                                     opacity: project.enabled ? 1 : 0.5;
                                     edited(text) => { root.remote-edited(index, text); }
                                 }
                                 IconButton {
                                     icon: Icons.server;
-                                    tooltip: "Escolher pasta no FTP";
+                                    tooltip: @tr("Browse FTP folder");
                                     enabled: !root.locked;
                                     clicked => { root.open-remote-picker(index); }
                                 }
                                 IconButton {
                                     icon: Icons.filter;
-                                    tooltip: "Arquivos ignorados";
+                                    tooltip: @tr("Ignored files");
                                     badge: project.ignore-count > 0 ? "\{project.ignore-count}" : "";
                                     enabled: !root.locked;
                                     clicked => { root.open-ignore(index); }
                                 }
                                 IconButton {
                                     icon: Icons.trash;
-                                    tooltip: "Remover projeto";
+                                    tooltip: @tr("Remove project");
                                     danger: true;
                                     enabled: !root.locked;
                                     clicked => { root.remove-project(index); }
@@ -1289,11 +1378,11 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     padding-top: 8px;
                     spacing: 10px;
-                    SectionLabel { text: "LOGS"; }
+                    SectionLabel { text: @tr("LOGS"); }
                     Rectangle { horizontal-stretch: 1; }
                     IconButton {
                         icon: Icons.eraser;
-                        tooltip: "Limpar logs";
+                        tooltip: @tr("Clear logs");
                         enabled: root.logs.length > 0;
                         clicked => { root.clear-logs(); }
                     }
@@ -1302,7 +1391,7 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     min-height: 140px;
                     if root.logs.length == 0: Text {
-                        text: "As alterações enviadas ao servidor aparecem aqui.";
+                        text: @tr("Changes sent to the server show up here.");
                         color: Style.muted;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -1363,12 +1452,12 @@ export component AppWindow inherits Window {
             VerticalLayout {
                 padding: 20px;
                 spacing: 12px;
-                DialogTitle { text: "Selecionar pasta remota"; }
+                DialogTitle { text: @tr("Choose remote folder"); }
                 HorizontalLayout {
                     spacing: 8px;
                     IconButton {
                         icon: Icons.corner-left-up;
-                        tooltip: "Subir uma pasta";
+                        tooltip: @tr("Up one folder");
                         enabled: !root.picker-loading && root.picker-path != "/";
                         clicked => { root.picker-up(); }
                     }
@@ -1395,7 +1484,7 @@ export component AppWindow inherits Window {
                 }
                 if !root.picker-loading && root.picker-dirs.length == 0: Text {
                     vertical-stretch: 1;
-                    text: "Nenhuma subpasta encontrada neste diretório.";
+                    text: @tr("No subfolders in this directory.");
                     color: Style.muted;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -1432,11 +1521,11 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     alignment: end;
                     ActionButton {
-                        text: "Cancelar";
+                        text: @tr("Cancel");
                         clicked => { root.picker-cancel(); }
                     }
                     ActionButton {
-                        text: "Selecionar esta pasta";
+                        text: @tr("Select this folder");
                         primary: true;
                         enabled: !root.picker-loading;
                         clicked => { root.picker-confirm(); }
@@ -1454,11 +1543,11 @@ export component AppWindow inherits Window {
                 padding: 20px;
                 spacing: 12px;
                 DialogTitle {
-                    text: "Arquivos ignorados — " + root.ignore-title;
+                    text: @tr("Ignored files — {}", root.ignore-title);
                     overflow: elide;
                 }
                 Hint {
-                    text: "Um padrão por linha, na mesma sintaxe do .gitignore, relativo à pasta local do projeto. Esses arquivos não são enviados nem apagados no servidor.";
+                    text: @tr("One pattern per line, using .gitignore syntax, relative to the project's local folder. These files are never uploaded or deleted on the server.");
                 }
                 TextEdit {
                     vertical-stretch: 1;
@@ -1470,11 +1559,11 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     alignment: end;
                     ActionButton {
-                        text: "Cancelar";
+                        text: @tr("Cancel");
                         clicked => { root.ignore-open = false; }
                     }
                     ActionButton {
-                        text: "Salvar";
+                        text: @tr("Save");
                         primary: true;
                         clicked => { root.save-ignore(); }
                     }
@@ -1499,11 +1588,11 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     alignment: end;
                     ActionButton {
-                        text: "Cancelar";
+                        text: @tr("Cancel");
                         clicked => { root.confirm-cancelled(); }
                     }
                     ActionButton {
-                        text: "Excluir";
+                        text: @tr("Delete");
                         primary: true;
                         danger: true;
                         clicked => { root.confirm-accepted(); }
@@ -1532,6 +1621,55 @@ export component AppWindow inherits Window {
                         primary: true;
                         clicked => { root.dismiss-notice(); }
                     }
+                }
+            }
+        }
+    }
+
+    if root.welcome-open: Overlay {
+        Dialog {
+            width: min(440px, root.width - 40px);
+            height: welcome-content.preferred-height;
+            welcome-content := VerticalLayout {
+                padding: 28px;
+                spacing: 14px;
+                HorizontalLayout {
+                    alignment: center;
+                    Image {
+                        width: 64px;
+                        height: 64px;
+                        source: @image-url("../../../assets/icons/128x128.png");
+                    }
+                }
+                Text {
+                    text: @tr("Welcome to FTP File Synchronizer");
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: Style.text;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+                Hint {
+                    text: @tr("Choose the app language. You can change it later in Settings.");
+                    horizontal-alignment: center;
+                }
+                VerticalLayout {
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 8px;
+                    for name[index] in Languages.names: ChoiceOption {
+                        text: name;
+                        selected: index == root.language-index;
+                        clicked => {
+                            root.language-index = index;
+                            root.language-selected(index);
+                        }
+                    }
+                }
+                ActionButton {
+                    text: @tr("Continue");
+                    primary: true;
+                    clicked => { root.welcome-confirmed(); }
                 }
             }
         }

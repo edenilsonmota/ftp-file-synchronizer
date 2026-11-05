@@ -1,0 +1,204 @@
+# Portuguese translation of FTP File Synchronizer.
+# Textos de crates/app/ui/app.slint (@tr). As mensagens geradas em Rust ficam em src/i18n.rs.
+msgid ""
+msgstr ""
+"Language: pt\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "Please wait..."
+msgstr "Aguarde..."
+
+msgid "Syncing"
+msgstr "Sincronizando"
+
+msgid "Stopped"
+msgstr "Parado"
+
+msgid "No server"
+msgstr "Sem servidor"
+
+msgid "Settings"
+msgstr "Configurações"
+
+msgid "APPEARANCE"
+msgstr "APARÊNCIA"
+
+msgid "Theme"
+msgstr "Tema"
+
+msgid "System"
+msgstr "Sistema"
+
+msgid "Dark"
+msgstr "Escuro"
+
+msgid "Light"
+msgstr "Claro"
+
+msgid "Language"
+msgstr "Idioma"
+
+msgid "SYNC"
+msgstr "SINCRONIZAÇÃO"
+
+msgid "Start syncing when the app opens"
+msgstr "Iniciar sincronização ao abrir o app"
+
+msgid "Uses the last selected profile."
+msgstr "Usa o perfil selecionado por último."
+
+msgid "Mirror deletions on the server"
+msgstr "Espelhar exclusões no servidor"
+
+msgid "When off, files and folders deleted locally stay on the server."
+msgstr "Quando desativado, arquivos e pastas apagados localmente continuam no servidor."
+
+msgid "FILES IGNORED IN ALL PROJECTS"
+msgstr "ARQUIVOS IGNORADOS EM TODOS OS PROJETOS"
+
+msgid "One pattern per line, using .gitignore syntax (e.g. *.log, vendor/, /config.php, !keep.log). Each project can have its own patterns. Changes apply the next time syncing starts."
+msgstr "Um padrão por linha, na mesma sintaxe do .gitignore (ex.: *.log, vendor/, /config.php, !manter.log). Cada projeto pode ter padrões próprios. As mudanças valem na próxima vez que a sincronização iniciar."
+
+msgid "ABOUT"
+msgstr "SOBRE"
+
+msgid "Automatically uploads every changed file in your folders to your FTP/FTPS server."
+msgstr "Envia automaticamente para o servidor FTP/FTPS cada arquivo alterado nas suas pastas."
+
+msgid "Open settings folder"
+msgstr "Abrir pasta de configuração"
+
+msgid "View on GitHub"
+msgstr "Ver no GitHub"
+
+msgid "PROFILES"
+msgstr "PERFIS"
+
+msgid "Untitled"
+msgstr "Sem nome"
+
+msgid "New profile"
+msgstr "Novo perfil"
+
+msgid "Expand menu"
+msgstr "Expandir menu"
+
+msgid "Collapse menu"
+msgstr "Recolher menu"
+
+msgid "Profile name"
+msgstr "Nome do perfil"
+
+msgid "Duplicate profile"
+msgstr "Duplicar perfil"
+
+msgid "Delete profile"
+msgstr "Excluir perfil"
+
+msgid "Set up the server below"
+msgstr "Configure o servidor abaixo"
+
+msgid "Stop syncing"
+msgstr "Parar sincronização"
+
+msgid "Start syncing"
+msgstr "Iniciar sincronização"
+
+msgid "SERVER"
+msgstr "SERVIDOR"
+
+msgid "Host"
+msgstr "Host"
+
+msgid "ftp.example.com"
+msgstr "ftp.exemplo.com"
+
+msgid "Port"
+msgstr "Porta"
+
+msgid "User"
+msgstr "Usuário"
+
+msgid "Password"
+msgstr "Senha"
+
+msgid "Testing..."
+msgstr "Testando..."
+
+msgid "Test connection"
+msgstr "Testar conexão"
+
+msgid "PROJECTS"
+msgstr "PROJETOS"
+
+msgid "Add project"
+msgstr "Adicionar projeto"
+
+msgid "Sync this project"
+msgstr "Monitorar este projeto"
+
+msgid "Local folder"
+msgstr "Pasta local"
+
+msgid "Choose local folder"
+msgstr "Selecionar pasta local"
+
+msgid "Remote folder (/web/...)"
+msgstr "Pasta remota (/web/...)"
+
+msgid "Browse FTP folder"
+msgstr "Escolher pasta no FTP"
+
+msgid "Ignored files"
+msgstr "Arquivos ignorados"
+
+msgid "Remove project"
+msgstr "Remover projeto"
+
+msgid "LOGS"
+msgstr "LOGS"
+
+msgid "Clear logs"
+msgstr "Limpar logs"
+
+msgid "Changes sent to the server show up here."
+msgstr "As alterações enviadas ao servidor aparecem aqui."
+
+msgid "Choose remote folder"
+msgstr "Selecionar pasta remota"
+
+msgid "Up one folder"
+msgstr "Subir uma pasta"
+
+msgid "No subfolders in this directory."
+msgstr "Nenhuma subpasta encontrada neste diretório."
+
+msgid "Cancel"
+msgstr "Cancelar"
+
+msgid "Select this folder"
+msgstr "Selecionar esta pasta"
+
+msgid "Ignored files — {}"
+msgstr "Arquivos ignorados — {}"
+
+msgid "One pattern per line, using .gitignore syntax, relative to the project's local folder. These files are never uploaded or deleted on the server."
+msgstr "Um padrão por linha, na mesma sintaxe do .gitignore, relativo à pasta local do projeto. Esses arquivos não são enviados nem apagados no servidor."
+
+msgid "Save"
+msgstr "Salvar"
+
+msgid "Delete"
+msgstr "Excluir"
+
+msgid "Welcome to FTP File Synchronizer"
+msgstr "Boas-vindas ao FTP File Synchronizer"
+
+msgid "Choose the app language. You can change it later in Settings."
+msgstr "Escolha o idioma do aplicativo. Você pode mudá-lo depois nas Configurações."
+
+msgid "Continue"
+msgstr "Continuar"

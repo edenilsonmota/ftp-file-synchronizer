@@ -36,7 +36,12 @@ Guidance for AI coding agents working in this repository.
 - Toggles never change their own state: `toggled(value)` reports the new value and the owner updates the model/property, so bindings to model data stay intact.
 - Profiles live in the sidebar (collapsible; state saved as `sidebar_collapsed`). Collapsed-item tooltips are drawn once at window level because the profile `ListView` clips its children. The active profile's name is the page title (editable). Selecting a profile while Settings is open validates the global ignore patterns and leaves Settings.
 - FTP transfers must stay in binary mode (`FileType::Binary`); the library default is ASCII.
-- User-facing strings are in Portuguese; keep language consistent unless asked to localize.
+- The UI is translated into Portuguese, English and Spanish. English is the source language:
+  - `app.slint` texts use `@tr("English text")`; Portuguese and Spanish live in `crates/app/translations/<pt|es>/LC_MESSAGES/ftp-file-synchronizer.po` (bundled at build time, no translation context). Add every new `@tr` text to both files; the test `todo_texto_da_interface_tem_traducao` fails otherwise.
+  - Messages produced in Rust are never plain strings: `sync-core` returns `Message` values (English in `Display`) and `crates/app/src/i18n.rs` translates them, plus the app's own `Text` values. Its `match`es are exhaustive, so a new message without a translation does not compile.
+  - Translation happens on the UI thread (`i18n::apply` selects the Slint bundle and the Rust language per thread).
+  - `Settings.language` is `None` until the user picks a language in the first-run welcome dialog (pre-selected from the OS locale via `sys-locale`).
+- Code comments, docs and commit messages stay in Portuguese.
 - Tests that touch the OS (watcher, FTP server via libunftp) must work on all three platforms; canonicalize temp dirs (macOS `/var` → `/private/var`).
 
 ## Pitfalls And Safety Notes

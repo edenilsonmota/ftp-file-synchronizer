@@ -2,17 +2,17 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Config, Error, Project, Result};
+use crate::{Config, Error, Message, Project, Result};
 
 /// Valida e limpa os dados de conexão.
 pub fn connection(config: &Config) -> Result<Config> {
     let host = config.host.trim().to_string();
     let user = config.user.trim().to_string();
     if host.is_empty() || user.is_empty() {
-        return Err(Error::invalid("Host e usuário são obrigatórios."));
+        return Err(Error::invalid(Message::HostAndUserRequired));
     }
     if config.port == 0 {
-        return Err(Error::invalid("Porta FTP inválida."));
+        return Err(Error::invalid(Message::InvalidPort));
     }
     Ok(Config {
         host,
@@ -26,7 +26,7 @@ pub fn connection(config: &Config) -> Result<Config> {
 pub fn config(config: &Config) -> Result<Config> {
     let mut validated = connection(config)?;
     if config.projects.is_empty() {
-        return Err(Error::invalid("Adicione pelo menos um projeto válido."));
+        return Err(Error::invalid(Message::NoValidProject));
     }
     validated.projects = config
         .projects
@@ -35,14 +35,13 @@ pub fn config(config: &Config) -> Result<Config> {
         .map(|project| {
             let remote = project.remote.trim().to_string();
             if project.local.as_os_str().is_empty() || remote.is_empty() {
-                return Err(Error::invalid("Mapeamento de pasta inválido."));
+                return Err(Error::invalid(Message::InvalidMapping));
             }
             let local = absolute(&project.local);
             if !local.is_dir() {
-                return Err(Error::invalid(format!(
-                    "Pasta local inexistente ou inacessível: {}",
-                    local.display()
-                )));
+                return Err(Error::invalid(Message::LocalFolderMissing {
+                    path: local.display().to_string(),
+                }));
             }
             Ok(Project {
                 local,
@@ -52,9 +51,7 @@ pub fn config(config: &Config) -> Result<Config> {
         })
         .collect::<Result<_>>()?;
     if validated.projects.is_empty() {
-        return Err(Error::invalid(
-            "Todos os projetos estão desativados; ative pelo menos um.",
-        ));
+        return Err(Error::invalid(Message::AllProjectsDisabled));
     }
     Ok(validated)
 }

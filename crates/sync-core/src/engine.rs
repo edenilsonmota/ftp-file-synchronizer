@@ -24,7 +24,7 @@ use notify_debouncer_full::{
 
 use crate::ftp::FtpClient;
 use crate::ignore_rules::{DEFAULT_PATTERNS, IgnoreRules};
-use crate::{Config, Error, Result, remote_path};
+use crate::{Config, Error, Message, Result, remote_path};
 
 pub const MAX_PENDING_TASKS: usize = 10_000;
 const RETRY_DELAYS: [Duration; 3] = [
@@ -66,10 +66,10 @@ pub enum LogLevel {
 
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
-    Log(LogLevel, String),
+    Log(LogLevel, Message),
     Running(bool),
     /// O observador de pastas falhou; a sincronização deve ser interrompida.
-    WatchFailed(String),
+    WatchFailed(Message),
 }
 
 pub type Listener = Arc<dyn Fn(EngineEvent) + Send + Sync>;
@@ -158,13 +158,14 @@ impl TaskQueue {
     }
 }
 
-enum Message {
+/// Comandos para a thread de envio.
+enum Command {
     Changes(usize, Vec<Change>),
     Stop,
 }
 
 struct Session {
-    sender: Sender<Message>,
+    sender: Sender<Command>,
     stopped: Arc<AtomicBool>,
     _debouncers: Vec<Debouncer<RecommendedWatcher, RecommendedCache>>,
 }
@@ -198,10 +199,10 @@ impl SyncEngine {
         mut remote: Box<dyn Remote>,
     ) -> Result<()> {
         self.stop_silently();
-        self.log(LogLevel::Info, "Iniciando serviço...");
+        self.log(LogLevel::Info, Message::Starting);
         if config.projects.is_empty() {
-            self.log(LogLevel::Error, "Nenhuma pasta configurada!");
-            return Err(Error::invalid("Nenhuma pasta configurada!"));
+            self.log(LogLevel::Error, Message::NoProjects);
+            return Err(Error::invalid(Message::NoProjects));
         }
         let rules = config
             .projects
@@ -210,12 +211,17 @@ impl SyncEngine {
                 IgnoreRules::new(&project.local, &options.ignore, &project.ignore).map(Arc::new)
             })
             .collect::<Result<Vec<_>>>()
-            .inspect_err(|error| self.log(LogLevel::Error, error.to_string()))?;
+            .inspect_err(|error| self.log(LogLevel::Error, error.message()))?;
         if let Err(error) = remote.connect(&config) {
-            self.log(LogLevel::Error, format!("Erro FTP: {error}"));
+            self.log(
+                LogLevel::Error,
+                Message::FtpError {
+                    reason: error.message().boxed(),
+                },
+            );
             return Err(error);
         }
-        self.log(LogLevel::Success, "Conexão FTP estabelecida!");
+        self.log(LogLevel::Success, Message::Connected);
 
         let (sender, receiver) = mpsc::channel();
         let mut debouncers = Vec::with_capacity(config.projects.len());
@@ -232,7 +238,10 @@ impl SyncEngine {
                     remote.disconnect();
                     self.log(
                         LogLevel::Error,
-                        format!("Erro ao monitorar {}: {error}", project.local.display()),
+                        Message::WatchError {
+                            path: project.local.display().to_string(),
+                            reason: error.message().boxed(),
+                        },
                     );
                     return Err(error);
                 }
@@ -262,13 +271,13 @@ impl SyncEngine {
             _debouncers: debouncers,
         });
         (self.listener)(EngineEvent::Running(true));
-        self.log(LogLevel::Info, format!("Monitorando {count} projeto(s)..."));
+        self.log(LogLevel::Info, Message::Watching { count });
         Ok(())
     }
 
     pub fn stop(&mut self) {
         if self.stop_silently() {
-            self.log(LogLevel::Info, "Serviço parado.");
+            self.log(LogLevel::Info, Message::Stopped);
         }
     }
 
@@ -279,14 +288,14 @@ impl SyncEngine {
             return false;
         };
         session.stopped.store(true, Ordering::SeqCst);
-        let _ = session.sender.send(Message::Stop);
+        let _ = session.sender.send(Command::Stop);
         drop(session);
         (self.listener)(EngineEvent::Running(false));
         true
     }
 
-    fn log(&self, level: LogLevel, message: impl Into<String>) {
-        (self.listener)(EngineEvent::Log(level, message.into()));
+    fn log(&self, level: LogLevel, message: Message) {
+        (self.listener)(EngineEvent::Log(level, message));
     }
 }
 
@@ -300,7 +309,7 @@ fn watch(
     project: usize,
     root: &Path,
     rules: Arc<IgnoreRules>,
-    sender: Sender<Message>,
+    sender: Sender<Command>,
     listener: Listener,
 ) -> Result<Debouncer<RecommendedWatcher, RecommendedCache>> {
     let root_display = root.display().to_string();
@@ -313,7 +322,7 @@ fn watch(
                 Ok(events) => {
                     let changes = events_to_changes(&events, &root_path, &rules);
                     if !changes.is_empty() {
-                        let _ = sender.send(Message::Changes(project, changes));
+                        let _ = sender.send(Command::Changes(project, changes));
                     }
                 }
                 Err(errors) => {
@@ -322,9 +331,10 @@ fn watch(
                         .map(ToString::to_string)
                         .collect::<Vec<_>>()
                         .join("; ");
-                    listener(EngineEvent::WatchFailed(format!(
-                        "Erro ao monitorar {root_display}: {message}"
-                    )));
+                    listener(EngineEvent::WatchFailed(Message::WatchError {
+                        path: root_display.clone(),
+                        reason: Message::Raw(message).boxed(),
+                    }));
                 }
             },
         )?;
@@ -392,7 +402,7 @@ struct Worker {
     /// Regras de cada projeto, na mesma ordem de `config.projects`.
     rules: Vec<Arc<IgnoreRules>>,
     remote: Box<dyn Remote>,
-    receiver: Receiver<Message>,
+    receiver: Receiver<Command>,
     stopped: Arc<AtomicBool>,
     listener: Listener,
     queue: TaskQueue,
@@ -422,8 +432,8 @@ impl Worker {
                 }
             };
             match message {
-                Some(Message::Stop) => break,
-                Some(Message::Changes(project, changes)) => {
+                Some(Command::Stop) => break,
+                Some(Command::Changes(project, changes)) => {
                     for change in changes {
                         self.enqueue(project, change);
                     }
@@ -438,11 +448,10 @@ impl Worker {
                 }
                 if self.queue.is_empty() && !self.is_stopped() {
                     match self.failed {
-                        0 => self.log(LogLevel::Info, "Sincronismo em dia."),
-                        failed => self.log(
-                            LogLevel::Error,
-                            format!("Fila concluída com {failed} erro(s)."),
-                        ),
+                        0 => self.log(LogLevel::Info, Message::UpToDate),
+                        count => {
+                            self.log(LogLevel::Error, Message::QueueFinishedWithErrors { count })
+                        }
                     }
                     self.failed = 0;
                 }
@@ -455,8 +464,8 @@ impl Worker {
         self.stopped.load(Ordering::SeqCst)
     }
 
-    fn log(&self, level: LogLevel, message: impl Into<String>) {
-        (self.listener)(EngineEvent::Log(level, message.into()));
+    fn log(&self, level: LogLevel, message: Message) {
+        (self.listener)(EngineEvent::Log(level, message));
     }
 
     fn enqueue(&mut self, project: usize, change: Change) {
@@ -464,7 +473,9 @@ impl Worker {
         if !self.queue.push(project, change) {
             self.log(
                 LogLevel::Error,
-                format!("Fila cheia; alteração não enfileirada: {}", path.display()),
+                Message::QueueFull {
+                    path: path.display().to_string(),
+                },
             );
         }
     }
@@ -482,7 +493,7 @@ impl Worker {
             match self.execute(task) {
                 Ok(()) => return true,
                 Err(error @ Error::Invalid(_)) => {
-                    self.log(LogLevel::Error, error.to_string());
+                    self.log(LogLevel::Error, error.message());
                     return false;
                 }
                 Err(error) => {
@@ -490,7 +501,10 @@ impl Worker {
                     if attempt + 1 < RETRY_DELAYS.len() {
                         self.log(
                             LogLevel::Error,
-                            format!("Tentativa {} falhou; reconectando: {error}", attempt + 1),
+                            Message::RetryFailed {
+                                attempt: attempt + 1,
+                                reason: error.message().boxed(),
+                            },
                         );
                     }
                     last_error = Some(error);
@@ -502,11 +516,11 @@ impl Worker {
         {
             self.log(
                 LogLevel::Error,
-                format!(
-                    "Erro em {} após {} tentativas: {error}",
-                    task.path.display(),
-                    RETRY_DELAYS.len()
-                ),
+                Message::GaveUp {
+                    path: task.path.display().to_string(),
+                    attempts: RETRY_DELAYS.len(),
+                    reason: error.message().boxed(),
+                },
             );
         }
         false
@@ -521,23 +535,31 @@ impl Worker {
         let relative = task
             .path
             .strip_prefix(&project.local)
-            .map_err(|_| Error::invalid("Arquivo fora da pasta local configurada."))?
+            .map_err(|_| Error::invalid(Message::FileOutsideProject))?
             .to_path_buf();
         let shown = display_relative(&relative);
         let remote = remote_path::join(&project.remote, &relative)?;
 
         match fs::metadata(&task.path) {
             Ok(metadata) if metadata.is_file() => {
-                self.log(LogLevel::Info, format!("[Upload] {shown}"));
+                self.log(
+                    LogLevel::Info,
+                    Message::Uploading {
+                        path: shown.clone(),
+                    },
+                );
                 self.remote.upload(&self.config, &task.path, &remote)?;
-                self.log(LogLevel::Success, format!("Sucesso: {shown}"));
+                self.log(LogLevel::Success, Message::Uploaded { path: shown });
             }
             Ok(metadata) if metadata.is_dir() && task.scan_dir => {
                 let mut files = Vec::new();
                 collect_files(&task.path, &project.local, rules, &mut files)?;
                 self.log(
                     LogLevel::Info,
-                    format!("[Pasta] {shown} ({} arquivo(s))", files.len()),
+                    Message::FolderQueued {
+                        path: shown,
+                        files: files.len(),
+                    },
                 );
                 for file in files {
                     self.enqueue(
@@ -554,21 +576,25 @@ impl Worker {
                 // Se a própria pasta do projeto sumiu (disco desmontado, rede caiu),
                 // não espelha a "exclusão" de tudo no servidor.
                 if !project.local.is_dir() {
-                    return Err(Error::invalid(format!(
-                        "Pasta local do projeto indisponível ({}); exclusões ignoradas.",
-                        project.local.display()
-                    )));
+                    return Err(Error::invalid(Message::ProjectRootMissing {
+                        path: project.local.display().to_string(),
+                    }));
                 }
                 if relative.as_os_str().is_empty() {
                     return Ok(());
                 }
                 if !self.mirror_deletions {
-                    self.log(LogLevel::Info, format!("[Exclusão não espelhada] {shown}"));
+                    self.log(LogLevel::Info, Message::DeletionNotMirrored { path: shown });
                     return Ok(());
                 }
-                self.log(LogLevel::Info, format!("[Remover] {shown}"));
+                self.log(
+                    LogLevel::Info,
+                    Message::Removing {
+                        path: shown.clone(),
+                    },
+                );
                 if self.remote.remove(&self.config, &remote)? {
-                    self.log(LogLevel::Success, format!("Removido: {shown}"));
+                    self.log(LogLevel::Success, Message::Removed { path: shown });
                 }
             }
             Err(error) => return Err(error.into()),

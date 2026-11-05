@@ -58,6 +58,7 @@ O **FTP File Synchronizer** observa a pasta direto no sistema de arquivos. Qualq
 - **🛡️ Exclusões com segurança.** Se a pasta do projeto sumir (disco desmontado, rede caiu), nada é apagado no servidor. O espelhamento de exclusões também pode ser desligado nas configurações.
 - **🧹 Ignora o que não deve subir.** Padrões no formato do `.gitignore`, globais e por projeto (por padrão, `node_modules/`, `.git/`, `.vscode/` e `desktop.ini`). Arquivos ignorados nunca são enviados nem apagados no servidor.
 - **🎨 Tema claro, escuro ou do sistema**, e ícones embutidos no executável, idênticos nos três sistemas.
+- **🌎 Português, inglês e espanhol.** Na primeira abertura o app pergunta o idioma (já sugerindo o do sistema); dá para trocar a qualquer momento nas configurações.
 - **🔁 Resiliente.** Novas tentativas com reconexão automática e conexão mantida viva durante períodos ociosos.
 - **🪶 Leve.** Binário nativo de cerca de 20 MB, instaladores de cerca de 10 MB, sem navegador embutido.
 - **🖥️ Multiplataforma de verdade.** Mesma interface no Windows, Linux (X11 e Wayland) e macOS, testada nos três a cada alteração.
@@ -212,6 +213,12 @@ cargo test --workspace                     # testes (servidor FTP real e observa
 cargo clippy --workspace --all-targets     # análise estática
 cargo fmt --all                            # formatação
 ```
+
+### Traduções
+
+Os textos da interface são escritos em inglês com `@tr("...")` em `crates/app/ui/app.slint`. As traduções ficam em `crates/app/translations/{pt,es}/LC_MESSAGES/ftp-file-synchronizer.po` e são embutidas no executável. As mensagens geradas em Rust (log, avisos e erros) são traduzidas em `crates/app/src/i18n.rs`.
+
+Para adicionar um texto, use `@tr` no `.slint` e inclua a tradução nos dois `.po`. O teste `todo_texto_da_interface_tem_traducao` falha se faltar alguma.
 
 ### Pacotes locais
 

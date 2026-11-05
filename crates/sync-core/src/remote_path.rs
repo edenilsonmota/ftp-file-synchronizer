@@ -2,7 +2,7 @@
 
 use std::path::{Component, Path};
 
-use crate::{Error, Result};
+use crate::{Error, Message, Result};
 
 /// Normaliza um caminho remoto: barras `/`, prefixo `/`, sem `.`, sem barras
 /// duplicadas e sem barra final (exceto a raiz).
@@ -17,14 +17,14 @@ pub fn normalize(path: &str) -> String {
 /// Une a pasta remota base com um caminho relativo local, recusando `..`.
 pub fn join(remote_base: &str, relative: &Path) -> Result<String> {
     if remote_base.split(['/', '\\']).any(|part| part == "..") {
-        return Err(Error::invalid("Caminho remoto não pode conter \"..\"."));
+        return Err(Error::invalid(Message::RemotePathWithParent));
     }
     let mut parts = vec![normalize(remote_base)];
     for component in relative.components() {
         match component {
             Component::Normal(part) => parts.push(part.to_string_lossy().into_owned()),
             Component::CurDir => {}
-            _ => return Err(Error::invalid("Caminho remoto inválido.")),
+            _ => return Err(Error::invalid(Message::InvalidRemotePath)),
         }
     }
     Ok(normalize(&parts.join("/")))
