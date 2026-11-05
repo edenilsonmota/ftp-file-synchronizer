@@ -19,7 +19,10 @@ Funciona com qualquer editor. Leve, nativo e multiplataforma.
 
 <br>
 
-<img src="docs/assets/screenshot.png" width="820" alt="Janela do FTP File Synchronizer com servidor FTPS configurado e três projetos mapeados">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/main-dark.png">
+  <img src="docs/assets/main-light.png" width="820" alt="Tela principal do FTP File Synchronizer: perfis na barra lateral, servidor, projetos e log de envios">
+</picture>
 
 </div>
 
@@ -35,15 +38,26 @@ O **FTP File Synchronizer** observa a pasta direto no sistema de arquivos. Qualq
 
 ---
 
+## 🖼️ Telas
+
+| | Tema escuro | Tema claro |
+|---|---|---|
+| **Principal** | <img src="docs/assets/main-dark.png" alt="Tela principal no tema escuro"> | <img src="docs/assets/main-light.png" alt="Tela principal no tema claro"> |
+| **Configurações** | <img src="docs/assets/settings-dark.png" alt="Configurações no tema escuro"> | <img src="docs/assets/settings-light.png" alt="Configurações no tema claro"> |
+
+---
+
 ## ✨ Funcionalidades
 
 - **🔄 Sincronização em tempo real.** Criou, editou, renomeou ou apagou: o servidor acompanha.
-- **📁 Vários projetos ao mesmo tempo.** Mapeie quantas pastas quiser, cada uma para seu destino remoto.
+- **📁 Vários projetos ao mesmo tempo.** Mapeie quantas pastas quiser, cada uma para seu destino remoto, e pause um projeto sem precisar removê-lo.
+- **👥 Perfis.** Cada perfil tem seu servidor, sua credencial e seus projetos (ex.: Produção e Homologação); troque com um clique.
 - **🧭 Navegador de pastas do FTP.** Escolha a pasta remota navegando no servidor, sem digitar caminhos.
-- **🔒 FTPS e cofre de senhas.** TLS explícito validado pelos certificados do sistema; a senha fica no Windows Credential Manager, no Keychain do macOS ou no Secret Service do Linux.
+- **🔒 FTPS e cofre de senhas.** TLS explícito validado pelos certificados do sistema; a senha de cada perfil fica no Windows Credential Manager, no Keychain do macOS ou no Secret Service do Linux.
 - **📦 Pastas inteiras.** Uma pasta criada ou renomeada tem todo o conteúdo enviado.
-- **🛡️ Exclusões com segurança.** Se a pasta do projeto sumir (disco desmontado, rede caiu), nada é apagado no servidor.
-- **🧹 Ignora o que não deve subir.** `node_modules`, `.git`, `.vscode` e `desktop.ini` ficam de fora.
+- **🛡️ Exclusões com segurança.** Se a pasta do projeto sumir (disco desmontado, rede caiu), nada é apagado no servidor. O espelhamento de exclusões também pode ser desligado nas configurações.
+- **🧹 Ignora o que não deve subir.** Padrões no formato do `.gitignore`, globais e por projeto (por padrão, `node_modules/`, `.git/`, `.vscode/` e `desktop.ini`). Arquivos ignorados nunca são enviados nem apagados no servidor.
+- **🎨 Tema claro, escuro ou do sistema**, e ícones embutidos no executável, idênticos nos três sistemas.
 - **🔁 Resiliente.** Novas tentativas com reconexão automática e conexão mantida viva durante períodos ociosos.
 - **🪶 Leve.** Binário nativo de cerca de 20 MB, instaladores de cerca de 10 MB, sem navegador embutido.
 - **🖥️ Multiplataforma de verdade.** Mesma interface no Windows, Linux (X11 e Wayland) e macOS, testada nos três a cada alteração.
@@ -119,10 +133,12 @@ A desinstalação mantém as configurações salvas.
 
 ## 🧭 Como usar
 
-1. Preencha **host**, **usuário**, **senha** e **porta**. Marque **FTPS** se o servidor suportar e clique em **Testar conexão**.
-2. Em **Mapeamento de pastas**, escolha a pasta local e a pasta remota (digite, como `/public_html/site`, ou use **Escolher FTP**).
-3. Clique em **INICIAR**.
+1. Na barra lateral, escolha ou crie um **perfil**. O nome do perfil é o título da página: clique nele para renomear. Preencha **host**, **usuário**, **senha** e **porta**, ative **FTPS** se o servidor suportar e teste a conexão (ícone de tomada).
+2. Em **Projetos**, escolha a pasta local e a pasta remota (digite, como `/public_html/site`, ou navegue no servidor pelo ícone de servidor). O interruptor à esquerda pausa ou retoma o projeto, e o ícone de filtro define os arquivos ignorados daquele projeto.
+3. Clique em **▶** para iniciar.
 4. Trabalhe normalmente: cada alteração aparece no log e chega ao servidor.
+
+Passe o mouse (ou navegue com Tab) sobre um ícone para ver o que ele faz. Tema, início automático, espelhamento de exclusões e padrões ignorados globais ficam em **Configurações**, no rodapé da barra lateral. A barra lateral pode ser recolhida pelo botão de seta na borda, mostrando só os ícones; o app lembra a escolha.
 
 > [!TIP]
 > Abrir o aplicativo de novo traz a janela que já está aberta, em vez de iniciar uma segunda cópia. Fechar a janela encerra a sincronização e salva a configuração.
@@ -158,12 +174,14 @@ Workspace Cargo com dois crates:
 | `crates/sync-core/src/validate.rs` | Validação da configuração |
 | `crates/sync-core/src/ftp.rs` | Cliente FTP/FTPS |
 | `crates/sync-core/src/engine.rs` | Observador de pastas, fila e envio |
+| `crates/sync-core/src/ignore_rules.rs` | Padrões ignorados (sintaxe do `.gitignore`) |
 | `crates/sync-core/src/remote_path.rs` | Caminhos remotos |
 | `crates/app/ui/app.slint` | Interface |
+| `crates/app/ui/icons/` | Ícones [Lucide](https://lucide.dev) (ISC), embutidos no executável |
 | `crates/app/src/main.rs` | Ligação entre interface e motor |
 | `crates/app/src/single_instance.rs` | Instância única |
 
-`sync-core` não depende da interface e é testado isoladamente.
+`sync-core` não depende da interface e é testado isoladamente. A interface tem testes próprios, sem janela, com o backend de testes do Slint.
 
 </details>
 
