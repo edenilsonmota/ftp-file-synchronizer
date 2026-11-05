@@ -104,6 +104,37 @@ mod tests {
         assert!(rules.is_ignored(root, Path::new("/p/storage/cache/a.txt")));
     }
 
+    /// Caminhos são relativos à pasta local do projeto; com `/` no início ou no
+    /// meio, o padrão vale a partir da raiz do projeto (como no Git).
+    #[test]
+    fn caminhos_relativos_a_raiz_do_projeto() {
+        let root = Path::new("/home/dev/professor");
+        let rules = rules(
+            root,
+            &[],
+            &["application/controllers/config/*", "**/cache/*", "/.env"],
+        );
+        let path = |relative: &str| root.join(relative);
+        assert!(rules.is_ignored(root, &path("application/controllers/config/db.php")));
+        // `*` não atravessa pastas, mas a pasta inteira já está coberta.
+        assert!(rules.is_ignored(root, &path("application/controllers/config/sub/a.php")));
+        // Com barra no meio, só a partir da raiz do projeto.
+        assert!(!rules.is_ignored(root, &path("modulos/application/controllers/config/a.php")));
+        assert!(!rules.is_ignored(root, &path("application/controllers/Home.php")));
+        // `**/` vale em qualquer profundidade.
+        assert!(rules.is_ignored(root, &path("cache/a.html")));
+        assert!(rules.is_ignored(root, &path("modulos/x/cache/a.html")));
+        assert!(rules.is_ignored(root, &path(".env")));
+        assert!(!rules.is_ignored(root, &path("api/.env")));
+        // Caminho completo do disco ou do servidor não funciona como padrão.
+        let absolute = rules_for(root, "/home/dev/professor/application/");
+        assert!(!absolute.is_ignored(root, &path("application/a.php")));
+    }
+
+    fn rules_for(root: &Path, pattern: &str) -> IgnoreRules {
+        rules(root, &[], &[pattern])
+    }
+
     #[test]
     fn pasta_ignorada_apagada_continua_ignorada() {
         let dir = tempfile::tempdir().unwrap();
