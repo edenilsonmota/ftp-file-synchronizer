@@ -116,6 +116,8 @@ pub struct Settings {
     pub sidebar_collapsed: bool,
     /// Inicia a sincronização do perfil ativo ao abrir o app.
     pub auto_start: bool,
+    /// Fechar a janela deixa o app na bandeja do sistema, se houver uma.
+    pub close_to_tray: bool,
     /// Apaga no servidor o que foi apagado localmente.
     pub mirror_deletions: bool,
     /// Padrões ignorados em todos os projetos (formato `.gitignore`).
@@ -138,6 +140,7 @@ impl Settings {
             theme: Theme::default(),
             sidebar_collapsed: false,
             auto_start: false,
+            close_to_tray: true,
             mirror_deletions: true,
             ignore: DEFAULT_PATTERNS
                 .iter()

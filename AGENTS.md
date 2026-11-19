@@ -7,7 +7,7 @@ Guidance for AI coding agents working in this repository.
 - Desktop app (Rust + Slint) that syncs local file changes to FTP/FTPS.
 - Cargo workspace:
   - `crates/sync-core`: sync engine, no UI dependencies (config, validation, FTP client, watcher/queue, remote paths).
-  - `crates/app`: desktop binary `ftp-file-synchronizer` (Slint UI in `ui/app.slint`, glue in `src/main.rs`, single instance in `src/single_instance.rs`).
+  - `crates/app`: desktop binary `ftp-file-synchronizer` (Slint UI in `ui/app.slint`, glue in `src/main.rs`, single instance in `src/single_instance.rs`, system tray in `src/tray.rs`).
 - Primary documentation: [README.md](README.md).
 
 ## Run And Build
@@ -33,6 +33,7 @@ Guidance for AI coding agents working in this repository.
 - UI icons are Lucide SVGs in `crates/app/ui/icons` (embedded at build time, tinted with `colorize`). Never use icon fonts or emoji: they render differently per OS.
 - Icon-only buttons use the `IconButton` component, whose `tooltip` is also its `accessible-label`; UI tests find buttons and toggles by that label.
 - Colors come from the `Style` global in `app.slint` (dark and light tokens, accent gradient). Use its tokens instead of hard-coded colors or `Palette` brushes; Fluent `Palette` colors cannot be overridden, so custom controls (`Toggle`, `Segmented`, `ActionButton`) replace Fluent buttons, switches and combo boxes.
+- System tray (`src/tray.rs`): `tray-icon` on Windows/macOS, `ksni` (StatusNotifierItem over D-Bus, no GTK) on Linux. Tray actions arrive from other threads or from inside the OS message handling; only schedule work with `upgrade_in_event_loop`, never touch the window there. The tray is created by a zero-delay `slint::Timer` because macOS needs the event loop running. The app runs `slint::run_event_loop_until_quit()`: closing the window hides it (after saving) when `tray-available` and `close_to_tray` are true, otherwise quits; the tray's Quit ends the loop. If the tray disappears (Linux bar restarted), a hidden window is shown again. On macOS the Dock icon is hidden while the window is.
 - Toggles never change their own state: `toggled(value)` reports the new value and the owner updates the model/property, so bindings to model data stay intact.
 - Profiles live in the sidebar (collapsible; state saved as `sidebar_collapsed`). Collapsed-item tooltips are drawn once at window level because the profile `ListView` clips its children. The active profile's name is the page title (editable). Selecting a profile while Settings is open validates the global ignore patterns and leaves Settings.
 - FTP transfers must stay in binary mode (`FileType::Binary`); the library default is ASCII.
@@ -49,12 +50,13 @@ Guidance for AI coding agents working in this repository.
 - `sync_core::APP_ID` must match the binary name, the `.desktop` file name, the hicolor icon names and `StartupWMClass`. It is set as the Wayland `app_id`/X11 `WM_CLASS` via `slint::set_xdg_app_id` after `BackendSelector::select()` and before creating the window. Changing any of these breaks Linux icons.
 - App icons are generated from `assets/logo.svg` (48 px and up) and `assets/logo-small.svg` (16–32 px) by `assets/render-icons.sh` (needs `rsvg-convert` and ImageMagick). Edit the SVGs and rerun the script; never edit the PNG/ICO files by hand.
 - Keep the fixed `fluent` Slint style (`crates/app/build.rs`) so the UI looks the same on every OS.
-- Preserve single-instance behavior and native window behavior (minimize to taskbar, close to exit and save config).
+- Preserve single-instance behavior (a second launch shows the window, also when hidden in the tray) and native window behavior (minimize to taskbar; close hides to the tray and saves config, or quits when there is no tray or `close_to_tray` is off).
+- The Windows/macOS tray code does not compile on Linux. To type-check it locally, copy `src/tray.rs` into a scratch crate with only its dependencies and run `cargo clippy --target x86_64-pc-windows-msvc` / `aarch64-apple-darwin` (the full workspace does not cross-check because `ring` needs a C toolchain).
 - Never mirror deletions when a project's root folder is missing.
 - Always stop the engine (drops watchers) before restarting it to avoid duplicate watchers.
 
 ## Validation
 
 - Run the commands in "Run And Build".
-- After UI or engine changes, run the app and manually check: start/stop sync, test connection, remote folder picker, local folder dialog, profile switch/add/duplicate/delete, project toggle and ignore editor, settings page and theme, log updates, minimize/maximize/close.
-- When running the app for manual tests, point `XDG_CONFIG_HOME` (Linux) at a scratch folder to keep the real config untouched. The OS keyring is still the real one.
+- After UI or engine changes, run the app and manually check: start/stop sync, test connection, remote folder picker, local folder dialog, profile switch/add/duplicate/delete, project toggle and ignore editor, settings page and theme, log updates, minimize/maximize/close, tray icon (close to tray, restore by clicking it, start/stop and Quit from its menu).
+- When running the app for manual tests, point `XDG_CONFIG_HOME` (Linux) at a scratch folder to keep the real config untouched. The OS keyring is still the real one. If the installed app is running, also set another `USER`: it is part of the single-instance socket name, otherwise the test build just shows the installed app's window and exits.

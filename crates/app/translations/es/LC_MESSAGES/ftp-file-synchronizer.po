@@ -50,6 +50,15 @@ msgstr "Iniciar la sincronización al abrir la app"
 msgid "Uses the last selected profile."
 msgstr "Usa el último perfil seleccionado."
 
+msgid "Keep running in the system tray when closed"
+msgstr "Seguir en la bandeja del sistema al cerrar"
+
+msgid "Syncing continues in the background. Use Quit in the tray icon menu to exit."
+msgstr "La sincronización continúa en segundo plano. Para salir, usa Salir en el menú del ícono de la bandeja."
+
+msgid "No system tray was found on this desktop, so closing the window quits the app."
+msgstr "No se encontró una bandeja del sistema en este entorno, así que cerrar la ventana cierra la app."
+
 msgid "Mirror deletions on the server"
 msgstr "Replicar eliminaciones en el servidor"
 

@@ -264,6 +264,13 @@ pub enum Text {
     PendingFiles {
         files: Vec<String>,
     },
+    /// Itens do menu do ícone na bandeja.
+    TrayShow,
+    TrayStartSync,
+    TrayStopSync,
+    TrayQuit,
+    /// Dica do ícone na bandeja.
+    TrayTooltip(crate::tray::Status),
 }
 
 /// Quantos nomes de arquivo aparecem no aviso antes de "e mais N".
@@ -405,6 +412,34 @@ pub fn text(text: Text) -> String {
                     format!("{names} y {more} más"),
                 ),
             }
+        }
+        TrayShow => pick(
+            "Abrir FTP File Synchronizer",
+            "Open FTP File Synchronizer",
+            "Abrir FTP File Synchronizer",
+        ),
+        TrayStartSync => pick(
+            "Iniciar sincronização",
+            "Start syncing",
+            "Iniciar sincronización",
+        ),
+        TrayStopSync => pick(
+            "Parar sincronização",
+            "Stop syncing",
+            "Detener sincronización",
+        ),
+        TrayQuit => pick("Sair", "Quit", "Salir"),
+        TrayTooltip(status) => {
+            let status = match status {
+                crate::tray::Status::Stopped => pick("parado", "stopped", "detenido"),
+                crate::tray::Status::Running => pick("sincronizando", "syncing", "sincronizando"),
+                crate::tray::Status::Attention => pick(
+                    "arquivos não enviados",
+                    "files not uploaded",
+                    "archivos no enviados",
+                ),
+            };
+            format!("FTP File Synchronizer: {status}")
         }
     }
 }

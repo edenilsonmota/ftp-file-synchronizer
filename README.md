@@ -59,6 +59,7 @@ O **FTP File Synchronizer** observa a pasta direto no sistema de arquivos. Qualq
 - **🧹 Ignora o que não deve subir.** Padrões no formato do `.gitignore`, globais e por projeto (por padrão, `node_modules/`, `.git/`, `.vscode/` e `desktop.ini`). Arquivos ignorados nunca são enviados nem apagados no servidor.
 - **🎨 Tema claro, escuro ou do sistema**, e ícones embutidos no executável, idênticos nos três sistemas.
 - **🌎 Português, inglês e espanhol.** Na primeira abertura o app pergunta o idioma (já sugerindo o do sistema); dá para trocar a qualquer momento nas configurações.
+- **📌 Na bandeja do sistema.** Fechar a janela deixa o app sincronizando em segundo plano, com um ícone que mostra o estado (verde: sincronizando; laranja: arquivos não enviados) e um menu para abrir a janela, iniciar ou parar a sincronização e sair.
 - **🔁 Resiliente.** Novas tentativas com reconexão automática e conexão mantida viva durante períodos ociosos.
 - **🪶 Leve.** Binário nativo de cerca de 20 MB, instaladores de cerca de 10 MB, sem navegador embutido.
 - **🖥️ Multiplataforma de verdade.** Mesma interface no Windows, Linux (X11 e Wayland) e macOS, testada nos três a cada alteração.
@@ -139,10 +140,12 @@ A desinstalação mantém as configurações salvas.
 3. Clique em **▶** para iniciar.
 4. Trabalhe normalmente: cada alteração aparece no log e chega ao servidor.
 
-Passe o mouse (ou navegue com Tab) sobre um ícone para ver o que ele faz. Tema, início automático, espelhamento de exclusões e padrões ignorados globais ficam em **Configurações**, no rodapé da barra lateral. A barra lateral pode ser recolhida pelo botão de seta na borda, mostrando só os ícones; o app lembra a escolha.
+Passe o mouse (ou navegue com Tab) sobre um ícone para ver o que ele faz. Tema, início automático, bandeja do sistema, espelhamento de exclusões e padrões ignorados globais ficam em **Configurações**, no rodapé da barra lateral. A barra lateral pode ser recolhida pelo botão de seta na borda, mostrando só os ícones; o app lembra a escolha.
 
 > [!TIP]
-> Abrir o aplicativo de novo traz a janela que já está aberta, em vez de iniciar uma segunda cópia. Fechar a janela encerra a sincronização e salva a configuração.
+> Abrir o aplicativo de novo traz a janela que já está aberta, em vez de iniciar uma segunda cópia. Fechar a janela salva a configuração e deixa o app na bandeja do sistema, sincronizando; para encerrar, use **Sair** no menu do ícone. Quem preferir que fechar encerre o app pode desligar **Continuar na bandeja do sistema ao fechar** em Configurações.
+>
+> No Linux, o ícone usa o padrão StatusNotifierItem: aparece no KDE, XFCE, Cinnamon, Waybar e no GNOME com a extensão AppIndicator (já incluída no Ubuntu). Sem bandeja no ambiente, fechar a janela encerra o app.
 
 ---
 
@@ -181,6 +184,7 @@ Workspace Cargo com dois crates:
 | `crates/app/ui/icons/` | Ícones [Lucide](https://lucide.dev) (ISC), embutidos no executável |
 | `crates/app/src/main.rs` | Ligação entre interface e motor |
 | `crates/app/src/single_instance.rs` | Instância única |
+| `crates/app/src/tray.rs` | Ícone e menu na bandeja do sistema |
 
 `sync-core` não depende da interface e é testado isoladamente. A interface tem testes próprios, sem janela, com o backend de testes do Slint.
 

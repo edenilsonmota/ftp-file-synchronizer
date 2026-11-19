@@ -676,6 +676,8 @@ component SettingsPage inherits VerticalLayout {
     in-out property <int> language-index;
     callback language-selected(int);
     in-out property <bool> auto-start;
+    in-out property <bool> close-to-tray;
+    in property <bool> tray-available;
     in-out property <bool> mirror-deletions;
     in-out property <string> global-ignore;
     in property <string> app-version;
@@ -744,6 +746,14 @@ component SettingsPage inherits VerticalLayout {
                         description: @tr("Uses the last selected profile.");
                         checked: root.auto-start;
                         toggled(value) => { root.auto-start = value; }
+                    }
+                    SettingToggle {
+                        title: @tr("Keep running in the system tray when closed");
+                        description: root.tray-available
+                            ? @tr("Syncing continues in the background. Use Quit in the tray icon menu to exit.")
+                            : @tr("No system tray was found on this desktop, so closing the window quits the app.");
+                        checked: root.close-to-tray;
+                        toggled(value) => { root.close-to-tray = value; }
                     }
                     SettingToggle {
                         title: @tr("Mirror deletions on the server");
@@ -896,6 +906,9 @@ export component AppWindow inherits Window {
     // Primeira abertura: pergunta o idioma.
     in-out property <bool> welcome-open;
     in-out property <bool> auto-start;
+    in-out property <bool> close-to-tray: true;
+    // Há um ícone do app na bandeja do sistema.
+    in property <bool> tray-available;
     in-out property <bool> mirror-deletions: true;
     in-out property <string> global-ignore;
     in property <string> app-version;
@@ -946,6 +959,12 @@ export component AppWindow inherits Window {
     callback dismiss-notice();
     callback confirm-accepted();
     callback confirm-cancelled();
+    // Mudou algo que o ícone na bandeja mostra (estado ou idioma).
+    callback tray-state-changed();
+    changed running => { root.tray-state-changed(); }
+    changed busy => { root.tray-state-changed(); }
+    changed pending-visible => { root.tray-state-changed(); }
+    changed language-index => { root.tray-state-changed(); }
 
     // Tema: "Sistema" segue o sistema operacional enquanto nenhum tema fixo for aplicado.
     // Ao fixar um tema, guarda o esquema do sistema para poder voltar a ele depois.
@@ -1101,6 +1120,8 @@ export component AppWindow inherits Window {
                 language-index <=> root.language-index;
                 language-selected(index) => { root.language-selected(index); }
                 auto-start <=> root.auto-start;
+                close-to-tray <=> root.close-to-tray;
+                tray-available: root.tray-available;
                 mirror-deletions <=> root.mirror-deletions;
                 global-ignore <=> root.global-ignore;
                 app-version: root.app-version;

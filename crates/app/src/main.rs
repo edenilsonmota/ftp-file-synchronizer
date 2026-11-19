@@ -3,6 +3,7 @@
 
 mod i18n;
 mod single_instance;
+mod tray;
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use i18n::Text;
+use slint::winit_030::WinitWindowAccessor;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 use sync_core::config::{DEFAULT_PROFILE_ID, DEFAULT_PROFILE_NAME};
 use sync_core::engine::{EngineEvent, LogLevel as CoreLogLevel};
@@ -33,6 +35,7 @@ thread_local! {
 }
 
 type SharedEngine = Arc<Mutex<SyncEngine>>;
+type SharedTray = Rc<RefCell<Option<tray::Tray>>>;
 
 fn main() -> Result<(), slint::PlatformError> {
     if single_instance::notify_existing() {
@@ -54,10 +57,7 @@ fn main() -> Result<(), slint::PlatformError> {
     single_instance::listen({
         let weak = ui.as_weak();
         move || {
-            let _ = weak.upgrade_in_event_loop(|ui| {
-                ui.window().set_minimized(false);
-                let _ = ui.show();
-            });
+            let _ = weak.upgrade_in_event_loop(|ui| show_window(&ui));
         }
     });
 
@@ -67,6 +67,8 @@ fn main() -> Result<(), slint::PlatformError> {
     register_project_callbacks(&ui, &app);
     register_remote_picker(&ui, &app);
     register_settings_callbacks(&ui, &app);
+    register_window_callbacks(&ui, &app);
+    let tray = create_tray(&ui);
     ui.on_dismiss_notice({
         let weak = ui.as_weak();
         move || weak.unwrap().set_notice(SharedString::new())
@@ -76,9 +78,13 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.invoke_start_sync();
     }
 
-    ui.run()?;
-
-    // Fechar a janela encerra o app; a configuração editada não se perde.
+    // Com a bandeja, fechar a janela só a esconde; o laço só termina pelo
+    // "Sair" do menu da bandeja ou ao fechar a janela quando não há bandeja.
+    ui.show()?;
+    slint::run_event_loop_until_quit()?;
+    tray.borrow_mut().take();
+    let _ = ui.hide();
+    // A configuração editada não se perde ao sair.
     app.persist();
     lock(&engine).stop();
     Ok(())
@@ -164,6 +170,7 @@ impl App {
         });
         ui.set_sidebar_collapsed(settings.sidebar_collapsed);
         ui.set_auto_start(settings.auto_start);
+        ui.set_close_to_tray(settings.close_to_tray);
         ui.set_mirror_deletions(settings.mirror_deletions);
         ui.set_global_ignore(settings.ignore.join("\n").into());
     }
@@ -211,6 +218,7 @@ impl App {
         };
         settings.sidebar_collapsed = ui.get_sidebar_collapsed();
         settings.auto_start = ui.get_auto_start();
+        settings.close_to_tray = ui.get_close_to_tray();
         settings.mirror_deletions = ui.get_mirror_deletions();
         settings.ignore = parse_patterns(&ui.get_global_ignore());
         let profile = settings.active_mut();
@@ -778,6 +786,116 @@ fn register_settings_callbacks(ui: &AppWindow, app: &Rc<App>) {
     });
 }
 
+/// Fechar a janela a esconde na bandeja (salvando a configuração) quando há
+/// bandeja e o usuário não desligou a opção; senão, encerra o app.
+fn register_window_callbacks(ui: &AppWindow, app: &Rc<App>) {
+    ui.window().on_close_requested({
+        let app = app.clone();
+        move || {
+            let ui = app.ui();
+            if ui.get_tray_available() && ui.get_close_to_tray() {
+                app.persist();
+                tray::set_dock_visible(false);
+            } else {
+                let _ = slint::quit_event_loop();
+            }
+            slint::CloseRequestResponse::HideWindow
+        }
+    });
+}
+
+/// Mostra a janela (escondida na bandeja ou minimizada) e a traz para a frente.
+fn show_window(ui: &AppWindow) {
+    tray::set_dock_visible(true);
+    let window = ui.window();
+    let _ = ui.show();
+    window.set_minimized(false);
+    window.with_winit_window(|winit| winit.focus_window());
+    window.request_redraw();
+}
+
+/// Cria o ícone na bandeja assim que o laço de eventos começa (o macOS exige
+/// o laço rodando) e o mantém atualizado com o estado da sincronização.
+fn create_tray(ui: &AppWindow) -> SharedTray {
+    let shared = SharedTray::default();
+    ui.on_tray_state_changed({
+        let weak = ui.as_weak();
+        let shared = shared.clone();
+        move || {
+            if let Some(tray) = shared.borrow().as_ref() {
+                tray.update(tray_state(&weak.unwrap()));
+            }
+        }
+    });
+    let weak = ui.as_weak();
+    let created = shared.clone();
+    slint::Timer::single_shot(Duration::ZERO, move || {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        // As ações chegam de outra thread ou de dentro do tratamento de
+        // mensagens do sistema: só agenda o trabalho no laço de eventos.
+        let handler = ui.as_weak();
+        let on_action = move |action| {
+            let _ = handler.upgrade_in_event_loop(move |ui| tray_action(&ui, action));
+        };
+        match tray::Tray::new(tray_state(&ui), on_action) {
+            Ok(tray) => *created.borrow_mut() = Some(tray),
+            Err(error) => log::warn!("Bandeja do sistema indisponível: {error}"),
+        }
+    });
+    shared
+}
+
+fn tray_state(ui: &AppWindow) -> tray::State {
+    let running = ui.get_running();
+    let status = if ui.get_pending_visible() {
+        tray::Status::Attention
+    } else if running {
+        tray::Status::Running
+    } else {
+        tray::Status::Stopped
+    };
+    tray::State {
+        status,
+        busy: ui.get_busy(),
+        tooltip: i18n::text(Text::TrayTooltip(status)),
+        show: i18n::text(Text::TrayShow),
+        sync: i18n::text(if running {
+            Text::TrayStopSync
+        } else {
+            Text::TrayStartSync
+        }),
+        quit: i18n::text(Text::TrayQuit),
+    }
+}
+
+fn tray_action(ui: &AppWindow, action: tray::Action) {
+    match action {
+        tray::Action::Show => show_window(ui),
+        tray::Action::ToggleSync => {
+            if ui.get_busy() {
+                return;
+            }
+            if ui.get_running() {
+                ui.invoke_stop_sync();
+            } else {
+                ui.invoke_start_sync();
+            }
+        }
+        tray::Action::Quit => {
+            let _ = slint::quit_event_loop();
+        }
+        tray::Action::Available(available) => {
+            ui.set_tray_available(available);
+            // Sem bandeja, a janela escondida ficaria inacessível.
+            if !available && !ui.window().is_visible() {
+                show_window(ui);
+            }
+        }
+    }
+}
+
 struct RemotePicker {
     weak: Weak<AppWindow>,
     target: Cell<usize>,
@@ -1093,6 +1211,7 @@ mod tests {
         fixture.click("Light");
         assert_eq!(ui.get_theme_index(), 2);
         fixture.click("Start syncing when the app opens");
+        fixture.click("Keep running in the system tray when closed");
         fixture.click("Mirror deletions on the server");
 
         // Padrão inválido: continua nas configurações.
@@ -1109,8 +1228,90 @@ mod tests {
         let saved = fixture.saved();
         assert_eq!(saved.theme, Theme::Light);
         assert!(saved.auto_start);
+        assert!(!saved.close_to_tray);
         assert!(!saved.mirror_deletions);
         assert_eq!(saved.ignore, vec!["node_modules/", "*.tmp"]);
+    }
+
+    /// Pede para fechar a janela, como o botão da barra de título.
+    fn close_window(ui: &AppWindow) {
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+    }
+
+    #[test]
+    fn fechar_com_bandeja_esconde_a_janela_e_salva() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        register_window_callbacks(ui, &fixture.app);
+        ui.show().unwrap();
+        tray_action(ui, tray::Action::Available(true));
+        ui.set_host("ftp.editado".into());
+
+        close_window(ui);
+        assert!(!ui.window().is_visible());
+        assert_eq!(fixture.saved().active().config.host, "ftp.editado");
+
+        // "Abrir" no menu da bandeja traz a janela de volta.
+        tray_action(ui, tray::Action::Show);
+        assert!(ui.window().is_visible());
+    }
+
+    #[test]
+    fn bandeja_que_some_traz_a_janela_de_volta() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        register_window_callbacks(ui, &fixture.app);
+        ui.show().unwrap();
+        tray_action(ui, tray::Action::Available(true));
+        close_window(ui);
+        assert!(!ui.window().is_visible());
+
+        // A barra do ambiente foi fechada: sem ícone, a janela não pode sumir.
+        tray_action(ui, tray::Action::Available(false));
+        assert!(ui.window().is_visible());
+        assert!(!ui.get_tray_available());
+    }
+
+    #[test]
+    fn opcao_da_bandeja_explica_quando_nao_ha_bandeja() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        fixture.click("Settings");
+        let hint = |text: &str| ElementHandle::find_by_accessible_label(ui, text).count();
+        assert_eq!(
+            hint("No system tray was found on this desktop, so closing the window quits the app."),
+            1
+        );
+        tray_action(ui, tray::Action::Available(true));
+        assert_eq!(
+            hint("Syncing continues in the background. Use Quit in the tray icon menu to exit."),
+            1
+        );
+    }
+
+    #[test]
+    fn menu_da_bandeja_acompanha_a_sincronizacao_e_o_idioma() {
+        let fixture = Fixture::new();
+        let ui = &fixture.ui;
+        let state = tray_state(ui);
+        assert_eq!(state.status, tray::Status::Stopped);
+        assert_eq!(state.sync, "Start syncing");
+        assert_eq!(state.tooltip, "FTP File Synchronizer: stopped");
+
+        ui.set_running(true);
+        ui.set_busy(true);
+        let state = tray_state(ui);
+        assert_eq!(state.status, tray::Status::Running);
+        assert_eq!(state.sync, "Stop syncing");
+        assert!(state.busy);
+
+        show_pending(ui, vec!["a.php".into()]);
+        assert_eq!(tray_state(ui).status, tray::Status::Attention);
+
+        i18n::apply(Language::Pt);
+        assert_eq!(tray_state(ui).sync, "Parar sincronização");
+        assert_eq!(tray_state(ui).quit, "Sair");
     }
 
     #[test]
